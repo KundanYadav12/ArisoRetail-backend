@@ -1,0 +1,15 @@
+========================================
+             KITCHEN ORDER TICKET       
+========================================
+KOT Ref: #ORD-20260728-1370
+Date/Time: 28/7/2026, 12:22:41 pm
+Type: Takeaway
+Cashier: Cashier Aman
+----------------------------------------
+Item Name                         Qty   
+----------------------------------------
+McSpicy Chicken Burger             1
+McSpicy Paneer Burger              2
+----------------------------------------
+
+

@@ -1,0 +1,26 @@
+========================================
+       MCDONALD'S EXPRESS
+========================================
+GSTIN: 09AAAAA1111A1Z1
+Address: Food Court, DLF Mall, Noida, India
+Phone: +919999999991
+----------------------------------------
+Bill No: ORD-20260728-5396
+Cashier: McDonald's Admin
+Date: 28/7/2026, 4:41:15 pm
+Mode: CASH | Type: Takeaway
+----------------------------------------
+Item Name         Qty    Price    Total
+----------------------------------------
+Oreo McFlurry       1    95.00    95.00
+Soft Serve Vanil    1    35.00    35.00
+----------------------------------------
+Subtotal:                         130.00
+Discount:                           0.00
+GST (Taxes):                       23.40
+----------------------------------------
+GRAND TOTAL:                Rs.   153.40
+========================================
+        Thank you! Visit again.        
+========================================
+

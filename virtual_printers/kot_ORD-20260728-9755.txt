@@ -1,0 +1,16 @@
+========================================
+             KITCHEN ORDER TICKET       
+========================================
+KOT Ref: #ORD-20260728-9755
+Date/Time: 28/7/2026, 8:04:40 pm
+Type: Takeaway
+Cashier: McDonald's Admin
+----------------------------------------
+Item Name                         Qty   
+----------------------------------------
+McSpicy Paneer Burger              1
+McSpicy Chicken Burger             1
+French Fries (Large)               1
+----------------------------------------
+
+

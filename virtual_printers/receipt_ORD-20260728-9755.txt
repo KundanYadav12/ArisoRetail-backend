@@ -1,0 +1,27 @@
+========================================
+       MCDONALD'S EXPRESS
+========================================
+GSTIN: 09AAAAA1111A1Z1
+Address: Food Court, DLF Mall, Noida, India
+Phone: +919999999991
+----------------------------------------
+Bill No: ORD-20260728-9755
+Cashier: McDonald's Admin
+Date: 28/7/2026, 8:04:40 pm
+Mode: UPI | Type: Takeaway
+----------------------------------------
+Item Name         Qty    Price    Total
+----------------------------------------
+McSpicy Paneer B    1   170.00   170.00
+McSpicy Chicken     1   185.00   185.00
+French Fries (La    1   110.00   110.00
+----------------------------------------
+Subtotal:                         465.00
+Discount:                           0.00
+GST (Taxes):                       23.25
+----------------------------------------
+GRAND TOTAL:                Rs.   488.25
+========================================
+        Thank you! Visit again.        
+========================================
+
