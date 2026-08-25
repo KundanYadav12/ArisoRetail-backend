@@ -131,12 +131,12 @@ async function generateGstSlabExcelWorkbook({ restaurantInfo, slabs, invoices, d
     const found = (slabs || []).find(s => Math.round(parseFloat(s.gst_rate)) === rate) || {};
     const taxable = parseFloat(found.taxable_amount || 0);
     const totalGst = parseFloat(found.total_gst || 0);
-    const cgstRate = rate / 2;
-    const cgstAmt = totalGst / 2;
-    const sgstRate = rate / 2;
-    const sgstAmt = totalGst / 2;
-    const igstRate = 0;
-    const igstAmt = 0;
+    const cgstRate = found.cgst_rate !== undefined ? parseFloat(found.cgst_rate) : rate / 2;
+    const cgstAmt = found.cgst_amount !== undefined ? parseFloat(found.cgst_amount) : totalGst / 2;
+    const sgstRate = found.sgst_rate !== undefined ? parseFloat(found.sgst_rate) : rate / 2;
+    const sgstAmt = found.sgst_amount !== undefined ? parseFloat(found.sgst_amount) : totalGst / 2;
+    const igstRate = found.igst_rate !== undefined ? parseFloat(found.igst_rate) : 0;
+    const igstAmt = found.igst_amount !== undefined ? parseFloat(found.igst_amount) : 0;
     const totalInvoiceVal = taxable + totalGst;
     const invCount = parseInt(found.invoice_count || 0);
 

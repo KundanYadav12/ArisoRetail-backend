@@ -40,7 +40,8 @@ class OrderRepository {
           discount_value,
           customer_name,
           customer_phone,
-          idempotency_key
+          idempotency_key,
+          tax_type
         } = orderData;
 
         // Check idempotency inside transaction for strict race-condition safety
@@ -136,13 +137,14 @@ class OrderRepository {
 
         // 3. Insert Order
         const [orderResult] = await connection.execute(
-          'INSERT INTO orders (order_number, unique_order_number, idempotency_key, restaurant_id, cashier_id, cashier_name, subtotal, tax_amount, discount_amount, total_amount, payment_mode, payment_details, order_status, cashier_shift_id, table_number_or_takeaway, notes, kitchen_status, discount_type, discount_value, customer_name, customer_phone) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending", ?, ?, ?, ?)',
+          'INSERT INTO orders (order_number, unique_order_number, idempotency_key, restaurant_id, cashier_id, cashier_name, subtotal, tax_amount, discount_amount, total_amount, payment_mode, payment_details, order_status, cashier_shift_id, table_number_or_takeaway, notes, kitchen_status, discount_type, discount_value, customer_name, customer_phone, tax_type) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending", ?, ?, ?, ?, ?)',
           [
             uniqueOrderNumber, uniqueOrderNumber, idempotency_key || null, restaurantId, cashier_id, cashier_name, safeSubtotal, safeTaxAmount,
             safeDiscountAmount, safeTotalAmount, payment_mode, payment_details ? JSON.stringify(payment_details) : null,
             orderStatus, safeCashierShiftId, table_number_or_takeaway || 'Takeaway', notes || null,
-            discount_type || 'amount', parseFloat(discount_value || 0), customer_name || null, customer_phone || null
+            discount_type || 'amount', parseFloat(discount_value || 0), customer_name || null, customer_phone || null,
+            tax_type || 'intra'
           ]
         );
         const orderId = orderResult.insertId;
@@ -158,12 +160,18 @@ class OrderRepository {
           const barcode = item.barcode || null;
 
           let unitPrice, itemTax;
+          const soldQty = itemWeight !== null ? parseFloat(itemWeight) : itemQuantity;
+          const itemBaseTotal = itemPrice * soldQty;
+          const itemDiscount = isNaN(parseFloat(item.discount_amount)) ? 0.00 : parseFloat(item.discount_amount);
+
           if (gstMode === 'included') {
             unitPrice = parseFloat((itemPrice / (1 + (itemGstRate / 100))).toFixed(4));
-            itemTax = parseFloat(((itemPrice * itemQuantity) - (unitPrice * itemQuantity)).toFixed(2));
+            const totalWithTax = itemBaseTotal - itemDiscount;
+            itemTax = parseFloat((totalWithTax - (totalWithTax / (1 + (itemGstRate / 100)))).toFixed(2));
           } else {
             unitPrice = itemPrice;
-            itemTax = parseFloat(((unitPrice * itemQuantity) * (itemGstRate / 100)).toFixed(2));
+            const totalTaxable = itemBaseTotal - itemDiscount;
+            itemTax = parseFloat((totalTaxable * (itemGstRate / 100)).toFixed(2));
           }
 
           let menuItemId = item.menu_item_id || item.product_id || item.id || null;

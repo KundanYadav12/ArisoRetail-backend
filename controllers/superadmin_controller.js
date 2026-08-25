@@ -324,6 +324,172 @@ class SuperAdminController {
       return res.status(400).json({ error: err.message || 'Gemini API connection test failed.' });
     }
   }
+
+  // Distributor CRUD Handlers
+  static async getDistributors(req, res) {
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const distributors = await LicenseRepository.getAllDistributors();
+      return res.json(distributors);
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to retrieve distributors.' });
+    }
+  }
+
+  static async createDistributor(req, res) {
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: 'Distributor name is required.' });
+    }
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const id = await LicenseRepository.createDistributor(name);
+      return res.status(201).json({ message: 'Distributor created successfully.', id });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to create distributor.' });
+    }
+  }
+
+  static async updateDistributor(req, res) {
+    const { name } = req.body;
+    const { id } = req.params;
+    if (!name) {
+      return res.status(400).json({ error: 'Distributor name is required.' });
+    }
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const success = await LicenseRepository.updateDistributor(id, name);
+      if (!success) return res.status(404).json({ error: 'Distributor not found.' });
+      return res.json({ message: 'Distributor updated successfully.' });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to update distributor.' });
+    }
+  }
+
+  static async deleteDistributor(req, res) {
+    const { id } = req.params;
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const success = await LicenseRepository.deleteDistributor(id);
+      if (!success) return res.status(404).json({ error: 'Distributor not found.' });
+      return res.json({ message: 'Distributor deleted successfully.' });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to delete distributor.' });
+    }
+  }
+
+  // License Handlers
+  static async getLicenses(req, res) {
+    const { distributor_id } = req.query;
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const licenses = await LicenseRepository.getAllLicenses(distributor_id);
+      return res.json(licenses);
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to retrieve licenses.' });
+    }
+  }
+
+  static async generateLicenses(req, res) {
+    const { distributor_id, quantity, current_year_pricing, next_year_pricing } = req.body;
+    if (!distributor_id || !quantity) {
+      return res.status(400).json({ error: 'Distributor ID and Quantity are required.' });
+    }
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const codes = await LicenseRepository.generateLicenses(distributor_id, quantity, current_year_pricing, next_year_pricing);
+      return res.status(201).json({ message: `Successfully generated ${codes.length} licenses.`, codes });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to generate licenses.' });
+    }
+  }
+
+  static async updateLicense(req, res) {
+    const { id } = req.params;
+    const { current_year_pricing, next_year_pricing } = req.body;
+
+    if (current_year_pricing === undefined || next_year_pricing === undefined) {
+      return res.status(400).json({ error: 'Current year and next year pricing are required.' });
+    }
+
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const success = await LicenseRepository.updateLicensePricing(id, parseFloat(current_year_pricing), parseFloat(next_year_pricing));
+      if (!success) {
+        return res.status(400).json({ error: 'License pricing could not be updated. Ensure the license exists and is still AVAILABLE.' });
+      }
+      return res.json({ message: 'License pricing updated successfully.' });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to update license pricing.' });
+    }
+  }
+
+  static async exportDistributorLicenses(req, res) {
+    const { id } = req.params;
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const distributor = await LicenseRepository.getDistributorById(id);
+      if (!distributor) {
+        return res.status(404).json({ error: 'Distributor not found.' });
+      }
+
+      const licenses = await LicenseRepository.getAllLicenses(id);
+      const { generateExcelWorkbook } = require('../utils/excel_helper');
+
+      const columns = [
+        { header: 'Distributor Name', key: 'distributor_name', width: 22 },
+        { header: 'License ID', key: 'license_code', width: 18 },
+        { header: 'License Status', key: 'status', width: 14 },
+        { header: 'Generated Date', key: 'generated_date', width: 20 },
+        { header: 'Activation Date', key: 'activated_date', width: 20 },
+        { header: 'Store Name', key: 'store_name', width: 22 },
+        { header: 'User Name', key: 'owner_name', width: 18 },
+        { header: 'Email', key: 'owner_email', width: 22 },
+        { header: 'Phone', key: 'owner_mobile', width: 16 },
+        { header: 'Subscription Start Date', key: 'subscription_start_date', width: 20 },
+        { header: 'Subscription Expiry Date', key: 'subscription_expiry_date', width: 20 },
+        { header: 'Current Year Pricing', key: 'current_year_pricing', width: 18 },
+        { header: 'Next Year Pricing', key: 'next_year_pricing', width: 18 }
+      ];
+
+      const data = licenses.map(lic => ({
+        distributor_name: lic.distributor_name,
+        license_code: lic.license_code,
+        status: (lic.status || 'AVAILABLE').toUpperCase(),
+        generated_date: lic.created_at ? new Date(lic.created_at).toLocaleString() : 'N/A',
+        activated_date: lic.activated_at ? new Date(lic.activated_at).toLocaleString() : 'N/A',
+        store_name: lic.store_name || 'N/A',
+        owner_name: lic.owner_name || 'N/A',
+        owner_email: lic.owner_email || 'N/A',
+        owner_mobile: lic.owner_mobile || 'N/A',
+        subscription_start_date: lic.subscription_start_date ? new Date(lic.subscription_start_date).toLocaleDateString() : 'N/A',
+        subscription_expiry_date: lic.subscription_expires_at ? new Date(lic.subscription_expires_at).toLocaleDateString() : 'N/A',
+        current_year_pricing: lic.current_year_pricing !== undefined ? parseFloat(lic.current_year_pricing).toFixed(2) : '0.00',
+        next_year_pricing: lic.next_year_pricing !== undefined ? parseFloat(lic.next_year_pricing).toFixed(2) : '0.00'
+      }));
+
+      const buffer = await generateExcelWorkbook({
+        sheetName: 'License Inventory',
+        columns,
+        data
+      });
+
+      const filename = `${distributor.name.replace(/\s+/g, '_')}_Distributor_License_Inventory.xlsx`;
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      return res.send(buffer);
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to export license inventory.' });
+    }
+  }
 }
 
 module.exports = SuperAdminController;

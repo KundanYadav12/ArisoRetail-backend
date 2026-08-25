@@ -4,10 +4,18 @@ class SuperAdminRepository {
   static async getAllRestaurants() {
     const [rows] = await pool.execute(
       'SELECT r.*, ' +
+      'd.name as distributor_name, ' +
+      'l.license_code, ' +
+      'l.activated_at as subscription_start_date, ' +
+      'l.current_year_pricing, ' +
+      'l.next_year_pricing, ' +
       '(SELECT COUNT(*) FROM users u WHERE u.restaurant_id = r.id) as userCount, ' +
       '(SELECT COUNT(*) FROM orders o WHERE o.restaurant_id = r.id) as orderCount, ' +
       '(SELECT COALESCE(SUM(total_amount), 0) FROM orders o WHERE o.restaurant_id = r.id AND o.order_status != "cancelled") as totalRevenue ' +
-      'FROM restaurants r ORDER BY r.id DESC'
+      'FROM restaurants r ' +
+      'LEFT JOIN licenses l ON l.restaurant_id = r.id ' +
+      'LEFT JOIN distributors d ON l.distributor_id = d.id ' +
+      'ORDER BY r.id DESC'
     );
     return rows;
   }

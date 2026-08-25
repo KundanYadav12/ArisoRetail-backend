@@ -547,6 +547,98 @@ class AuthController {
       return res.status(500).json({ error: 'Failed to update password.' });
     }
   }
+
+  static async verifyLicense(req, res) {
+    const { license_id } = req.query;
+    if (!license_id) {
+      return res.status(400).json({ error: 'License ID query parameter is required.' });
+    }
+    const clean = license_id.trim();
+    if (!/^\d{12}$/.test(clean)) {
+      return res.status(400).json({ error: 'License ID must be exactly 12 numeric digits.' });
+    }
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const license = await LicenseRepository.findAvailableLicense(clean);
+      if (!license) {
+        return res.status(404).json({ error: 'License key is invalid, expired, or already in use.' });
+      }
+      return res.json({ valid: true, license_id: clean });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to verify license key.' });
+    }
+  }
+
+  static async registerWithLicense(req, res) {
+    const { license_id, store_name, owner_name, email, phone, password } = req.body;
+
+    if (!license_id || !store_name || !owner_name || !email || !password) {
+      return res.status(400).json({ error: 'License ID, Store Name, Owner Name, Email, and Password are required.' });
+    }
+
+    const cleanLicense = license_id.trim();
+    if (!/^\d{12}$/.test(cleanLicense)) {
+      return res.status(400).json({ error: 'License ID must be exactly 12 numeric digits.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+
+      // 1. Verify License availability
+      const license = await LicenseRepository.findAvailableLicense(cleanLicense);
+      if (!license) {
+        return res.status(400).json({ error: 'License ID is invalid, expired, or already in use.' });
+      }
+
+      // 2. Verify Email uniqueness across users
+      const [existingUser] = await pool.query(
+        'SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ? LIMIT 1',
+        [cleanEmail, cleanEmail]
+      );
+      if (existingUser.length > 0) {
+        return res.status(400).json({ error: 'An account with this email address is already registered.' });
+      }
+
+      // 3. Hash password
+      const passwordHash = await bcrypt.hash(password, 10);
+
+      // 4. Perform atomic transaction registration
+      const result = await LicenseRepository.registerStoreWithLicense({
+        licenseCode: cleanLicense,
+        storeName: store_name.trim(),
+        ownerName: owner_name.trim(),
+        email: cleanEmail,
+        phone: phone ? phone.trim() : null,
+        passwordHash
+      });
+
+      await SuperAdminRepository.addAuditLog(
+        result.restaurantId,
+        result.userId,
+        'STORE_REGISTERED_VIA_LICENSE',
+        `Store '${result.storeName}' successfully registered and activated using 12-digit License key: ${cleanLicense}`,
+        req.ip,
+        {
+          user_name: owner_name,
+          user_role: 'admin',
+          new_name: store_name
+        }
+      );
+
+      return res.status(201).json({
+        message: 'Store registered and activated successfully. You can now log in.',
+        restaurant_id: result.restaurantId,
+        email: result.email
+      });
+
+    } catch (err) {
+      console.error('[AuthController.registerWithLicense Error]', err);
+      return res.status(500).json({ error: err.message || 'Failed to register store using license.' });
+    }
+  }
 }
 
 module.exports = AuthController;

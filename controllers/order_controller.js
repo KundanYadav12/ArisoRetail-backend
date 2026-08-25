@@ -18,7 +18,7 @@ class OrderController {
     const { 
       items, payment_mode, payment_details, subtotal, tax_amount, discount_amount, total_amount, 
       table_number_or_takeaway, notes, status, discount_type, discount_value, customer_name, customer_phone, print_actions,
-      idempotency_key, offline_id
+      idempotency_key, offline_id, tax_type
     } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -60,7 +60,8 @@ class OrderController {
         discount_value,
         customer_name,
         customer_phone,
-        idempotency_key: safeIdempotencyKey
+        idempotency_key: safeIdempotencyKey,
+        tax_type: tax_type || 'intra'
       };
 
       // Transactional save to DB

@@ -224,6 +224,12 @@ class PrinterService {
         }
 
         cmds += `${name} ${qtyWtStr.padEnd(10, ' ')} ${rateStr.padEnd(10, ' ')} Rs.${total.padStart(8, ' ')}\n`;
+        if (s.show_tax_details !== 0 && item.gst_rate !== undefined && item.gst_rate !== null) {
+          const itemGst = parseFloat(item.gst_rate);
+          const itemTax = parseFloat(item.tax_amount || 0).toFixed(2);
+          const itemDisc = parseFloat(item.discount_amount || 0).toFixed(2);
+          cmds += `  [GST: ${itemGst}% | Tax: Rs.${itemTax}${itemDisc > 0 ? ` | Disc: -Rs.${itemDisc}` : ''}]\n`;
+        }
         if (item.notes) cmds += `  * Notes: ${item.notes}\n`;
       });
     }
@@ -251,12 +257,14 @@ class PrinterService {
     }
     
     if (s.show_tax_details !== 0 && taxVal > 0) {
-      const gstRate = parseFloat(s.gst_percentage || s.gst_rate || order.tax_rate || 5);
-      const halfTax = (taxVal / 2).toFixed(2);
-      const halfRate = (gstRate / 2).toString();
-      cmds += PrinterService.formatTwoColumns(`GST Tax (${gstRate}%):`, `Rs. ${taxVal.toFixed(2)}`, cols) + '\n';
-      cmds += PrinterService.formatTwoColumns(`  CGST (${halfRate}%):`, `Rs. ${halfTax}`, cols) + '\n';
-      cmds += PrinterService.formatTwoColumns(`  SGST (${halfRate}%):`, `Rs. ${halfTax}`, cols) + '\n';
+      if (order.tax_type === 'inter') {
+        cmds += PrinterService.formatTwoColumns('IGST Tax:', `Rs. ${taxVal.toFixed(2)}`, cols) + '\n';
+      } else {
+        const halfTax = (taxVal / 2).toFixed(2);
+        cmds += PrinterService.formatTwoColumns('CGST Tax:', `Rs. ${halfTax}`, cols) + '\n';
+        cmds += PrinterService.formatTwoColumns('SGST Tax:', `Rs. ${halfTax}`, cols) + '\n';
+        cmds += PrinterService.formatTwoColumns('Total Tax:', `Rs. ${taxVal.toFixed(2)}`, cols) + '\n';
+      }
     }
 
     cmds += divider;
@@ -266,6 +274,42 @@ class PrinterService {
     }
     cmds += PrinterService.formatTwoColumns('TOTAL:', `Rs. ${totalVal.toFixed(2)}`, cols) + '\n' + CMD_FONT_NORMAL + CMD_BOLD_OFF;
     cmds += doubleDivider;
+
+    // GST Slabs Summary
+    if (s.show_tax_details !== 0 && items && items.length > 0) {
+      cmds += '\n-- GST TAX SLABS SUMMARY --\n';
+      const gstGroups = {};
+      items.forEach(item => {
+        const rate = parseFloat(item.gst_rate !== undefined && item.gst_rate !== null ? item.gst_rate : 5);
+        if (!gstGroups[rate]) {
+          gstGroups[rate] = { taxable: 0, tax: 0 };
+        }
+        
+        const price = parseFloat(item.price || item.unit_price || 0);
+        const qty = parseFloat(item.item_weight || item.quantity || 1);
+        const disc = parseFloat(item.discount_amount || 0);
+        const tax = parseFloat(item.tax_amount || 0);
+        
+        let taxable = price * qty - disc;
+        if (s.gst_mode === 'included') {
+          taxable = taxable - tax;
+        }
+        
+        gstGroups[rate].taxable += taxable;
+        gstGroups[rate].tax += tax;
+      });
+      
+      cmds += 'Rate   TaxableAmt    TaxAmt    Total\n';
+      Object.keys(gstGroups).sort((a,b) => parseFloat(a) - parseFloat(b)).forEach(rate => {
+        const group = gstGroups[rate];
+        const rStr = `${rate}%`.padEnd(6, ' ');
+        const txblStr = `Rs.${group.taxable.toFixed(2)}`.padEnd(13, ' ');
+        const taxStr = `Rs.${group.tax.toFixed(2)}`.padEnd(10, ' ');
+        const totStr = `Rs.${(group.taxable + group.tax).toFixed(2)}`;
+        cmds += `${rStr}${txblStr}${taxStr}${totStr}\n`;
+      });
+      cmds += doubleDivider;
+    }
 
     // Footer
     cmds += CMD_ALIGN_CENTER;

@@ -4,6 +4,8 @@ const { authenticateToken, optionalAuthenticateToken } = require('../middlewares
 const router = express.Router();
 
 router.post('/login', AuthController.login);
+router.post('/register-with-license', AuthController.registerWithLicense);
+router.get('/verify-license', AuthController.verifyLicense);
 router.post('/logout', optionalAuthenticateToken, AuthController.logout);
 router.post('/refresh', AuthController.refreshToken);
 router.get('/me', authenticateToken, AuthController.getMe);

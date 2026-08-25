@@ -17,6 +17,18 @@ router.put('/restaurants/:id/status', SuperAdminController.toggleStatus);
 router.get('/plans', SuperAdminController.getSubscriptionPlans);
 router.get('/logs', SuperAdminController.getLogs);
 
+// Distributor Management Routes
+router.get('/distributors', SuperAdminController.getDistributors);
+router.post('/distributors', SuperAdminController.createDistributor);
+router.put('/distributors/:id', SuperAdminController.updateDistributor);
+router.delete('/distributors/:id', SuperAdminController.deleteDistributor);
+
+// License Management Routes
+router.get('/licenses', SuperAdminController.getLicenses);
+router.post('/licenses/generate', SuperAdminController.generateLicenses);
+router.put('/licenses/:id', SuperAdminController.updateLicense);
+router.get('/distributors/:id/export-licenses', SuperAdminController.exportDistributorLicenses);
+
 // Global Theme Management Routes (Super Admin Only)
 router.put('/theme', ThemeController.updateTheme);
 router.post('/theme/reset', ThemeController.resetTheme);

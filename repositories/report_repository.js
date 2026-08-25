@@ -222,10 +222,11 @@ class ReportRepository {
     const [slabRows] = await pool.execute(
       `SELECT 
         COALESCE(oi.gst_rate, 0.00) as gst_rate,
+        COALESCE(o.tax_type, 'intra') as tax_type,
         SUM(
           CASE 
-            WHEN rs.gst_mode = 'included' THEN (oi.price / (1 + (COALESCE(oi.gst_rate, 0) / 100))) * oi.quantity
-            ELSE (oi.price * oi.quantity)
+            WHEN rs.gst_mode = 'included' THEN ((oi.price * oi.quantity - oi.discount_amount) / (1 + (COALESCE(oi.gst_rate, 0) / 100)))
+            ELSE (oi.price * oi.quantity - oi.discount_amount)
           END
         ) as taxable_amount,
         SUM(oi.tax_amount) as total_gst,
@@ -237,7 +238,7 @@ class ReportRepository {
          AND o.created_at >= ? 
          AND o.created_at <= ? 
          AND o.order_status = 'completed'${paymentFilterSql}
-       GROUP BY COALESCE(oi.gst_rate, 0.00)
+       GROUP BY COALESCE(oi.gst_rate, 0.00), COALESCE(o.tax_type, 'intra')
        ORDER BY gst_rate ASC`,
       params
     );

@@ -301,14 +301,31 @@ class ReportController {
       // Map standard GST rates (0%, 5%, 12%, 18%, 28%)
       const standardRates = [0, 5, 12, 18, 28];
       const formattedSlabs = standardRates.map(rate => {
-        const found = reportData.slabs.find(s => Math.round(parseFloat(s.gst_rate)) === rate) || {};
-        const taxableAmount = parseFloat(found.taxable_amount || 0);
-        const totalGst = parseFloat(found.total_gst || 0);
-        const cgstAmount = totalGst / 2;
-        const sgstAmount = totalGst / 2;
-        const igstAmount = 0.00;
+        const matches = reportData.slabs.filter(s => Math.round(parseFloat(s.gst_rate)) === rate);
+        
+        let taxableAmount = 0;
+        let totalGst = 0;
+        let cgstAmount = 0;
+        let sgstAmount = 0;
+        let igstAmount = 0;
+        let invoiceCount = 0;
+        
+        matches.forEach(m => {
+          const mTaxable = parseFloat(m.taxable_amount || 0);
+          const mGst = parseFloat(m.total_gst || 0);
+          taxableAmount += mTaxable;
+          totalGst += mGst;
+          invoiceCount += parseInt(m.invoice_count || 0);
+          
+          if (m.tax_type === 'inter') {
+            igstAmount += mGst;
+          } else {
+            cgstAmount += mGst / 2;
+            sgstAmount += mGst / 2;
+          }
+        });
+        
         const invoiceValue = taxableAmount + totalGst;
-        const invoiceCount = parseInt(found.invoice_count || 0);
 
         return {
           gst_rate: rate,
@@ -317,7 +334,7 @@ class ReportController {
           cgst_amount: cgstAmount,
           sgst_rate: rate / 2,
           sgst_amount: sgstAmount,
-          igst_rate: 0,
+          igst_rate: rate,
           igst_amount: igstAmount,
           total_gst: totalGst,
           invoice_value: invoiceValue,
