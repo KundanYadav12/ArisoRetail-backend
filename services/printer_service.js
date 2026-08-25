@@ -182,14 +182,22 @@ class PrinterService {
       cmds += divider;
       items.forEach(item => {
         const isWeight = !!item.is_weight_based;
-        const name = (item.name || '').substring(0, 32);
+        const rawName = item.name || '';
+        let name = '';
+        if (rawName.length <= 32) {
+          name = rawName;
+        } else {
+          const firstLine = rawName.substring(0, 32);
+          const secondLine = rawName.substring(32, 64);
+          name = `${firstLine}\n${secondLine}`;
+        }
         const price = parseFloat(item.price || item.unit_price || 0);
         const total = parseFloat(item.total_price || (price * (item.quantity || item.item_weight || 1))).toFixed(2);
         
         let qtyWtStr = '';
         if (isWeight) {
           const wt = parseFloat(item.item_weight || item.quantity || 1).toFixed(3);
-          const unit = item.weight_unit || item.base_unit || 'kg';
+          const unit = (item.weight_unit === 'pcs' || item.base_unit === 'pcs') ? 'kg' : (item.weight_unit || item.base_unit || 'kg');
           qtyWtStr = `${wt}${unit}@Rs.${price.toFixed(2)}/${unit}`;
         } else {
           const qty = parseInt(item.quantity || 1, 10);
@@ -213,7 +221,7 @@ class PrinterService {
         let rateStr = '';
         if (isWeight) {
           const wt = parseFloat(item.item_weight || item.quantity || 1).toFixed(3);
-          const unit = item.weight_unit || item.base_unit || 'kg';
+          const unit = (item.weight_unit === 'pcs' || item.base_unit === 'pcs') ? 'kg' : (item.weight_unit || item.base_unit || 'kg');
           qtyWtStr = `${wt} ${unit}`;
           rateStr = `Rs.${price.toFixed(2)}/${unit}`;
         } else {
@@ -346,7 +354,15 @@ class PrinterService {
     
     // Header
     const kotTitle = s.kot_header || 'KITCHEN ORDER TICKET';
-    cmds += CMD_ALIGN_CENTER + CMD_BOLD_ON + CMD_FONT_DOUBLE + kotTitle.toUpperCase() + '\n' + CMD_FONT_NORMAL + CMD_BOLD_OFF;
+    cmds += CMD_ALIGN_CENTER + CMD_BOLD_ON;
+    if (cols === 48) {
+      cmds += CMD_FONT_DOUBLE;
+    }
+    cmds += kotTitle.toUpperCase() + '\n';
+    if (cols === 48) {
+      cmds += CMD_FONT_NORMAL;
+    }
+    cmds += CMD_BOLD_OFF;
     if (s.kitchen_name) cmds += `[ ${s.kitchen_name.toUpperCase()} ]\n`;
     cmds += `Order #${order.unique_order_number} | ${order.table_number_or_takeaway || 'Takeaway'}\n`;
     
@@ -358,7 +374,19 @@ class PrinterService {
     // Items
     cmds += CMD_ALIGN_LEFT + CMD_BOLD_ON;
     items.forEach(item => {
-      cmds += `${item.quantity} x ${item.name.toUpperCase()}\n`;
+      const prefix = `${item.quantity || 1} x `;
+      const maxNameLen = cols - prefix.length;
+      const name = (item.name || '').toUpperCase();
+      
+      let formattedName = '';
+      if (name.length <= maxNameLen) {
+        formattedName = name;
+      } else {
+        const firstLine = name.substring(0, maxNameLen);
+        const secondLine = name.substring(maxNameLen, maxNameLen * 2);
+        formattedName = `${firstLine}\n${' '.repeat(prefix.length)}${secondLine}`;
+      }
+      cmds += `${prefix}${formattedName}\n`;
       if (item.notes) {
         cmds += `   >>> NOTE: ${item.notes.toUpperCase()}\n`;
       }

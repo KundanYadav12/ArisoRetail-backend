@@ -118,6 +118,7 @@ class AuthController {
         id: user.id,
         restaurant_id: user.restaurant_id,
         restaurant_name: restaurant ? restaurant.name : null,
+        restaurant_logo_url: restaurant ? restaurant.logo_url : null,
         name: user.name,
         username: user.username,
         email: user.email,
