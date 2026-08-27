@@ -1,6 +1,33 @@
 const ReportRepository = require('../repositories/report_repository');
 const { generateExcelWorkbook, generateGstSlabExcelWorkbook } = require('../utils/excel_helper');
 
+const parseAndExpandDates = (queryDateFrom, queryDateTo) => {
+  const getLocalDateString = (date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const todayStr = getLocalDateString(new Date());
+  let dateTo = (queryDateTo || '').trim() || `${todayStr} 23:59:59`;
+  if (dateTo.length === 10) {
+    dateTo = `${dateTo} 23:59:59`;
+  }
+
+  let dateFrom = (queryDateFrom || '').trim();
+  if (!dateFrom) {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const thirtyDaysAgoStr = getLocalDateString(thirtyDaysAgo);
+    dateFrom = `${thirtyDaysAgoStr} 00:00:00`;
+  } else if (dateFrom.length === 10) {
+    dateFrom = `${dateFrom} 00:00:00`;
+  }
+
+  return { dateFrom, dateTo };
+};
+
 class ReportController {
   /**
    * Cashier dashboard metrics for the current day
@@ -21,11 +48,7 @@ class ReportController {
    * Admin dashboard metrics (requires date range)
    */
   static async getAdminDashboard(req, res) {
-    // Default to last 30 days if no range provided
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
 
     try {
       const restaurantId = req.user.restaurant_id;
@@ -63,10 +86,7 @@ class ReportController {
    * Export sales report to Excel (.xlsx) format
    */
   static async exportSalesExcel(req, res) {
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
 
     try {
       const restaurantId = req.user.restaurant_id;
@@ -107,10 +127,7 @@ class ReportController {
    * Export sales report to CSV format
    */
   static async exportSalesCSV(req, res) {
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
 
     try {
       const restaurantId = req.user.restaurant_id;
@@ -135,10 +152,7 @@ class ReportController {
    * Item-wise Sales Analytics Report
    */
   static async getItemWiseReport(req, res) {
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
 
     try {
       const restaurantId = req.user.restaurant_id;
@@ -163,10 +177,7 @@ class ReportController {
    */
   static async getItemSalesHistory(req, res) {
     const itemId = req.params.id;
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
 
     try {
       const restaurantId = req.user.restaurant_id;
@@ -187,10 +198,7 @@ class ReportController {
    * Export Item-wise Sales Report to Excel (.xlsx)
    */
   static async exportItemSalesExcel(req, res) {
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
 
     try {
       const restaurantId = req.user.restaurant_id;
@@ -248,10 +256,7 @@ class ReportController {
    * Export Item-wise Sales Report to CSV
    */
   static async exportItemSalesCSV(req, res) {
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
 
     try {
       const restaurantId = req.user.restaurant_id;
@@ -288,10 +293,7 @@ class ReportController {
    * Get GST Slab Report JSON summary for live dashboard display
    */
   static async getGstSlabReport(req, res) {
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
     const paymentMode = req.query.payment_mode || 'all';
 
     try {
@@ -360,10 +362,7 @@ class ReportController {
    * Export CA-Ready GST Slab Excel (.xlsx) file
    */
   static async exportGstSlabExcel(req, res) {
-    const dateTo = req.query.date_to || new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = req.query.date_from || thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
     const paymentMode = req.query.payment_mode || 'all';
 
     try {

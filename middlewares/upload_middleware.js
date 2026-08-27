@@ -18,14 +18,14 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  const filetypes = /jpeg|jpg|png|webp|gif/;
-  const mimetype = filetypes.test(file.mimetype);
-  const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-
-  if (mimetype && extname) {
+  const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif', '.heic', '.heif', '.jfif', '.bmp', '.tiff'];
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (allowedExts.includes(ext) || (file.mimetype && file.mimetype.startsWith('image/'))) {
     return cb(null, true);
   }
-  cb(new Error('Only image uploads are allowed! (jpg, jpeg, png, webp, gif)'));
+  const err = new Error('Only image uploads are allowed! Supported formats: JPG, JPEG, PNG, WEBP, SVG, GIF, HEIC, JFIF, BMP, TIFF.');
+  err.status = 400;
+  cb(err);
 };
 
 const upload = multer({

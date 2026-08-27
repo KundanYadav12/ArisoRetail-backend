@@ -121,7 +121,10 @@ app.get('/api/health', (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('[Global Error Middleware]', err);
-  const status = err.status || 500;
+  let status = err.status || 500;
+  if (err.code === 'LIMIT_FILE_SIZE' || err.name === 'MulterError') {
+    status = 400;
+  }
   return res.status(status).json({
     error: err.message || 'An unexpected error occurred on the server.'
   });
