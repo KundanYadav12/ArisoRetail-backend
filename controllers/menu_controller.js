@@ -75,6 +75,7 @@ class MenuController {
         spicy_level: parseInt(req.body.spicy_level || 0),
         is_available: parseInt(req.body.is_available !== undefined ? req.body.is_available : 1),
         image_url,
+        barcode_image_url: req.body.barcode_image_url || null,
         seq: parseInt(req.body.seq || 0),
         kitchen_category: req.body.kitchen_category || 'Main Kitchen',
         printer_id: req.body.printer_id ? parseInt(req.body.printer_id) : null
@@ -135,6 +136,7 @@ class MenuController {
         spicy_level: parseInt(req.body.spicy_level !== undefined ? req.body.spicy_level : existingItem.spicy_level),
         is_available: parseInt(req.body.is_available !== undefined ? req.body.is_available : existingItem.is_available),
         image_url,
+        barcode_image_url: req.body.barcode_image_url !== undefined ? req.body.barcode_image_url : existingItem.barcode_image_url,
         seq: parseInt(req.body.seq !== undefined ? req.body.seq : existingItem.seq),
         kitchen_category: req.body.kitchen_category || existingItem.kitchen_category,
         printer_id: req.body.printer_id !== undefined ? (req.body.printer_id ? parseInt(req.body.printer_id) : null) : existingItem.printer_id
@@ -188,6 +190,41 @@ class MenuController {
       return res.status(500).json({ error: 'Failed to reorder menu items.' });
     }
   }
+
+  /**
+   * PATCH /api/menu/:id/barcode-image
+   * Store a captured barcode image (data URL) against an existing menu item.
+   * Called when a user scans a barcode from the Add/Edit Item form.
+   */
+  static async updateBarcodeImage(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const itemId = req.params.id;
+      const { barcode_image_url } = req.body;
+
+      if (!barcode_image_url) {
+        return res.status(400).json({ error: 'barcode_image_url is required.' });
+      }
+
+      const existingItem = await MenuRepository.getById(itemId, restaurantId);
+      if (!existingItem) {
+        return res.status(404).json({ error: 'Menu item not found.' });
+      }
+
+      const pool = require('../config/db');
+      await pool.execute(
+        'UPDATE menu_items SET barcode_image_url = ? WHERE id = ? AND restaurant_id = ?',
+        [barcode_image_url, itemId, restaurantId]
+      );
+
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'MENU_BARCODE_IMAGE', `Updated barcode image for item: ${existingItem.name} (ID: ${itemId})`, req.ip);
+      return res.json({ message: 'Barcode image updated successfully.', barcode_image_url });
+    } catch (err) {
+      console.error('[updateBarcodeImage Error]', err);
+      return res.status(500).json({ error: 'Failed to update barcode image.' });
+    }
+  }
+
 
   /**
    * Bulk Delete Menu Items for a specific Tenant
@@ -632,6 +669,41 @@ class MenuController {
     } catch (err) {
       console.error('[Bulk Save Menu Error]', err);
       return res.status(500).json({ error: err.message || 'Failed to save menu items.' });
+    }
+  }
+
+
+  /**
+   * GET /api/menu/check-barcode?sku=XXX&exclude_id=123
+   * Check if a barcode/SKU is already assigned to another item in the store.
+   * Used by the Add/Edit Item form to show inline duplicate warning.
+   */
+  static async checkBarcodeDuplicate(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const { sku, exclude_id } = req.query;
+
+      if (!sku || !sku.trim()) {
+        return res.json({ duplicate: false });
+      }
+
+      const pool = require('../config/db');
+      let query = 'SELECT id, name FROM menu_items WHERE restaurant_id = ? AND (sku = ? OR barcode = ?)';
+      const params = [restaurantId, sku.trim(), sku.trim()];
+
+      if (exclude_id) {
+        query += ' AND id != ?';
+        params.push(parseInt(exclude_id));
+      }
+
+      const [rows] = await pool.execute(query, params);
+      if (rows.length > 0) {
+        return res.json({ duplicate: true, existing_item: { id: rows[0].id, name: rows[0].name } });
+      }
+      return res.json({ duplicate: false });
+    } catch (err) {
+      console.error('[checkBarcodeDuplicate Error]', err);
+      return res.status(500).json({ error: 'Failed to check barcode.' });
     }
   }
 }

@@ -29,6 +29,7 @@ router.post('/bulk-delete', bulkLimiter, authorizeRoles('admin'), MenuController
 router.post('/bulk-status', bulkLimiter, authorizeRoles('admin', 'manager'), MenuController.bulkUpdateStatus);
 
 router.get('/', MenuController.getAll);
+router.get('/check-barcode', MenuController.checkBarcodeDuplicate);
 router.get('/:id', MenuController.getById);
 
 // Admin/Manager can write menu items, supporting optional image upload
@@ -38,5 +39,8 @@ router.post('/reorder', authorizeRoles('admin', 'manager'), MenuController.reord
 
 // Only Admin can delete menu items
 router.delete('/:id', authorizeRoles('admin'), MenuController.delete);
+
+// Barcode image capture: stores a data-URL or image URL captured during barcode scan
+router.patch('/:id/barcode-image', authorizeRoles('admin', 'manager'), MenuController.updateBarcodeImage);
 
 module.exports = router;

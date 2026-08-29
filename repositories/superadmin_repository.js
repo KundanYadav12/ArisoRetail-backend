@@ -39,19 +39,19 @@ class SuperAdminRepository {
     const {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-      subscription_status, duration_months
+      subscription_status, duration_months, feature_superbill, barcode_scanner_enabled
     } = restaurant;
 
     const months = parseInt(duration_months || 12);
     
     const [result] = await pool.execute(
-      'INSERT INTO restaurants (name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile, gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit, subscription_status, subscription_start_at, subscription_expires_at, created_at) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? MONTH), NOW())',
+      'INSERT INTO restaurants (name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile, gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit, subscription_status, feature_superbill, barcode_scanner_enabled, subscription_start_at, subscription_expires_at, created_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? MONTH), NOW())',
       [
         name, domain || null, logo_url || null, address || null, phone || null,
         email || owner_email || null, owner_name || null, owner_email || null, owner_mobile || null,
         gst_number || null, subscription_plan_id || 1, max_user_limit || 5, max_manager_limit || 2,
-        max_cashier_limit || 3, subscription_status || 'trial', months
+        max_cashier_limit || 3, subscription_status || 'trial', feature_superbill ? 1 : 0, barcode_scanner_enabled ? 1 : 0, months
       ]
     );
     return result.insertId;
@@ -61,17 +61,35 @@ class SuperAdminRepository {
     const {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-      subscription_status, subscription_expires_at
+      subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled
     } = restaurant;
 
     const [result] = await pool.execute(
-      'UPDATE restaurants SET name = ?, domain = ?, logo_url = ?, address = ?, phone = ?, email = ?, owner_name = ?, owner_email = ?, owner_mobile = ?, gst_number = ?, subscription_plan_id = ?, max_user_limit = ?, max_manager_limit = ?, max_cashier_limit = ?, subscription_status = ?, subscription_expires_at = ?, updated_at = NOW() WHERE id = ?',
+      'UPDATE restaurants SET name = ?, domain = ?, logo_url = ?, address = ?, phone = ?, email = ?, owner_name = ?, owner_email = ?, owner_mobile = ?, gst_number = ?, subscription_plan_id = ?, max_user_limit = ?, max_manager_limit = ?, max_cashier_limit = ?, subscription_status = ?, subscription_expires_at = ?, feature_superbill = ?, barcode_scanner_enabled = ?, updated_at = NOW() WHERE id = ?',
       [
         name, domain || null, logo_url || null, address || null, phone || null,
         email || null, owner_name || null, owner_email || null, owner_mobile || null,
         gst_number || null, subscription_plan_id || 1, max_user_limit || 5, max_manager_limit || 2,
-        max_cashier_limit || 3, subscription_status || 'trial', subscription_expires_at || null, id
+        max_cashier_limit || 3, subscription_status || 'trial', subscription_expires_at || null,
+        feature_superbill !== undefined ? (feature_superbill ? 1 : 0) : 0,
+        barcode_scanner_enabled !== undefined ? (barcode_scanner_enabled ? 1 : 0) : 0, id
       ]
+    );
+    return result.affectedRows > 0;
+  }
+
+  static async toggleSuperBillPermission(id, enabled) {
+    const [result] = await pool.execute(
+      'UPDATE restaurants SET feature_superbill = ?, updated_at = NOW() WHERE id = ?',
+      [enabled ? 1 : 0, id]
+    );
+    return result.affectedRows > 0;
+  }
+
+  static async toggleBarcodeScannerPermission(id, enabled) {
+    const [result] = await pool.execute(
+      'UPDATE restaurants SET barcode_scanner_enabled = ?, updated_at = NOW() WHERE id = ?',
+      [enabled ? 1 : 0, id]
     );
     return result.affectedRows > 0;
   }

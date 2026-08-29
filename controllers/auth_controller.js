@@ -73,7 +73,7 @@ class AuthController {
 
       let restInfo = {};
       const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url FROM restaurants WHERE id = ?', [targetRestId]);
+      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, barcode_scanner_enabled FROM restaurants WHERE id = ?', [targetRestId]);
       if (rRows.length > 0) restInfo = rRows[0];
 
       return res.json({
@@ -89,6 +89,8 @@ class AuthController {
           restaurant_id: targetRestId,
           restaurant_name: restInfo.name || user.name || 'Ariso Retail Store',
           restaurant_logo_url: restInfo.logo_url || null,
+          feature_superbill: Boolean(restInfo.feature_superbill),
+          barcode_scanner_enabled: Boolean(restInfo.barcode_scanner_enabled),
           shift_id: activeShiftId,
           must_change_password: Boolean(user.must_change_password),
           is_verified: Boolean(user.is_verified)
@@ -126,7 +128,9 @@ class AuthController {
         is_active: user.is_active,
         must_change_password: Boolean(user.must_change_password),
         is_verified: Boolean(user.is_verified),
-        shift_id: req.user.shift_id || null
+        shift_id: req.user.shift_id || null,
+        feature_superbill: restaurant ? Boolean(restaurant.feature_superbill) : false,
+        barcode_scanner_enabled: restaurant ? Boolean(restaurant.barcode_scanner_enabled) : false
       };
 
       return res.json({ user: userProfile });
@@ -473,6 +477,11 @@ class AuthController {
       const accessToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRY });
       const refreshToken = jwt.sign(tokenPayload, JWT_REFRESH_SECRET, { expiresIn: JWT_REFRESH_EXPIRY });
 
+      let restInfo = {};
+      const targetRestId = user.restaurant_id || 1;
+      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill FROM restaurants WHERE id = ?', [targetRestId]);
+      if (rRows.length > 0) restInfo = rRows[0];
+
       return res.json({
         accessToken,
         refreshToken,
@@ -483,12 +492,46 @@ class AuthController {
           email: user.email,
           role: user.role,
           restaurant_id: user.restaurant_id,
+          restaurant_name: restInfo.name || user.name || 'Ariso Retail Store',
+          restaurant_logo_url: restInfo.logo_url || null,
+          feature_superbill: Boolean(restInfo.feature_superbill),
           shift_id: activeShiftId
         }
       });
     } catch (err) {
       console.error('Refresh token error:', err.message);
       return res.status(401).json({ error: 'Refresh token is invalid or has expired.', code: 'REFRESH_TOKEN_EXPIRED' });
+    }
+  }
+
+  static async getMe(req, res) {
+    try {
+      const user = await UserRepository.findById(req.user.id);
+      if (!user) return res.status(404).json({ error: 'User not found.' });
+
+      let restInfo = {};
+      const targetRestId = user.restaurant_id || 1;
+      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill FROM restaurants WHERE id = ?', [targetRestId]);
+      if (rRows.length > 0) restInfo = rRows[0];
+
+      return res.json({
+        user: {
+          id: user.id,
+          name: user.name,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          restaurant_id: targetRestId,
+          restaurant_name: restInfo.name || user.name || 'Ariso Retail Store',
+          restaurant_logo_url: restInfo.logo_url || null,
+          feature_superbill: Boolean(restInfo.feature_superbill),
+          must_change_password: Boolean(user.must_change_password),
+          is_verified: Boolean(user.is_verified)
+        }
+      });
+    } catch (err) {
+      console.error('getMe error:', err);
+      return res.status(500).json({ error: 'Failed to fetch user session.' });
     }
   }
 

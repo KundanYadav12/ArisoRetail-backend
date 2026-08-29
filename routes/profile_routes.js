@@ -6,6 +6,28 @@ const fs = require('fs');
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth_middleware');
 const ProfileController = require('../controllers/profile_controller');
 
+const MIME_TO_EXT = {
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'image/svg+xml': '.svg',
+  'image/heic': '.heic',
+  'image/heif': '.heif',
+  'image/jfif': '.jfif',
+  'image/bmp': '.bmp',
+  'image/tiff': '.tiff'
+};
+
+function getExtension(file) {
+  let ext = path.extname(file.originalname || '').toLowerCase();
+  if (!ext && file.mimetype) {
+    ext = MIME_TO_EXT[file.mimetype.toLowerCase()] || '';
+  }
+  return ext;
+}
+
 // Multer Storage Configuration for Logo Uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -16,7 +38,8 @@ const storage = multer.diskStorage({
     cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.png';
+    let ext = getExtension(file);
+    if (!ext) ext = '.png';
     const restId = req.user?.restaurant_id || 'rest';
     cb(null, `logo_${restId}_${Date.now()}${ext}`);
   }
@@ -27,7 +50,7 @@ const uploadLogoMiddleware = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB Limit
   fileFilter: (req, file, cb) => {
     const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif'];
-    const ext = path.extname(file.originalname).toLowerCase();
+    const ext = getExtension(file);
     if (allowedExts.includes(ext) || (file.mimetype && file.mimetype.startsWith('image/'))) {
       cb(null, true);
     } else {

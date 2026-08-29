@@ -119,7 +119,7 @@ class SuperAdminController {
     const {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-      subscription_status, subscription_expires_at
+      subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled
     } = req.body;
     const restaurantId = req.params.id;
 
@@ -131,7 +131,7 @@ class SuperAdminController {
       const success = await SuperAdminRepository.updateRestaurant(restaurantId, {
         name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
         gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-        subscription_status, subscription_expires_at
+        subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled
       });
 
       if (!success) {
@@ -205,6 +205,42 @@ class SuperAdminController {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to alter subscription status.' });
+    }
+  }
+
+  static async toggleSuperBill(req, res) {
+    const { enabled } = req.body;
+    const restaurantId = req.params.id;
+
+    try {
+      const success = await SuperAdminRepository.toggleSuperBillPermission(restaurantId, enabled);
+      if (!success) {
+        return res.status(404).json({ error: 'Restaurant not found.' });
+      }
+
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'SUPERBILL_TOGGLE', `Toggled SuperBill permission for Restaurant ID ${restaurantId} to: ${enabled ? 'ENABLED' : 'DISABLED'}`, req.ip);
+      return res.json({ message: `SuperBill feature permission ${enabled ? 'enabled' : 'disabled'} for store successfully.`, feature_superbill: enabled ? 1 : 0 });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to toggle SuperBill feature permission.' });
+    }
+  }
+
+  static async toggleBarcodeScanner(req, res) {
+    const { enabled } = req.body;
+    const restaurantId = req.params.id;
+
+    try {
+      const success = await SuperAdminRepository.toggleBarcodeScannerPermission(restaurantId, enabled);
+      if (!success) {
+        return res.status(404).json({ error: 'Restaurant not found.' });
+      }
+
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'TOGGLE_BARCODE_SCANNER', `SuperAdmin toggled barcode scanner to ${enabled ? 'ON' : 'OFF'} for Restaurant ID ${restaurantId}`, req.ip);
+      return res.json({ message: `Barcode scanner module ${enabled ? 'enabled' : 'disabled'} successfully.`, barcode_scanner_enabled: enabled ? 1 : 0 });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to toggle barcode scanner module.' });
     }
   }
 

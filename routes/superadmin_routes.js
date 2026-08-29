@@ -14,6 +14,8 @@ router.delete('/restaurants/:id', SuperAdminController.deleteRestaurant);
 router.post('/restaurants/:id/resend-otp', SuperAdminController.resendOwnerOTP);
 router.post('/restaurants/:id/renew', SuperAdminController.renewSubscription);
 router.put('/restaurants/:id/status', SuperAdminController.toggleStatus);
+router.patch('/restaurants/:id/toggle-superbill', SuperAdminController.toggleSuperBill);
+router.patch('/restaurants/:id/toggle-barcode-scanner', SuperAdminController.toggleBarcodeScanner);
 router.get('/plans', SuperAdminController.getSubscriptionPlans);
 router.get('/logs', SuperAdminController.getLogs);
 

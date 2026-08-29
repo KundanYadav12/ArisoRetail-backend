@@ -3,7 +3,7 @@ const pool = require('../config/db');
 class MenuRepository {
   static async getAll(restaurantId, filters = {}) {
     const { category_id, search, is_available, is_veg, limit, offset } = filters;
-    let query = 'SELECT m.*, c.name as category_name FROM menu_items m LEFT JOIN categories c ON m.category_id = c.id WHERE m.restaurant_id = ?';
+    let query = 'SELECT m.*, c.name as category_name, m.barcode_image_url FROM menu_items m LEFT JOIN categories c ON m.category_id = c.id WHERE m.restaurant_id = ?';
     const params = [restaurantId];
 
     if (category_id) {
@@ -50,7 +50,7 @@ class MenuRepository {
     const {
       category_id, name, sku, barcode, description, price, purchase_price,
       is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category,
-      gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url,
+      gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url,
       seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory
     } = item;
 
@@ -58,9 +58,9 @@ class MenuRepository {
       `INSERT INTO menu_items (
         restaurant_id, category_id, name, sku, barcode, description, price, purchase_price,
         is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category, gst_rate,
-        prep_time_minutes, is_veg, spicy_level, is_available, image_url, seq, kitchen_category,
+        prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url, seq, kitchen_category,
         printer_id, unit, current_stock, low_stock_threshold, track_inventory
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         restaurantId,
         category_id,
@@ -81,6 +81,7 @@ class MenuRepository {
         spicy_level !== undefined ? spicy_level : 0,
         is_available !== undefined ? is_available : 1,
         image_url || null,
+        barcode_image_url || null,
         seq !== undefined ? seq : 0,
         kitchen_category || 'Main Kitchen',
         printer_id || null,
@@ -97,7 +98,7 @@ class MenuRepository {
     const {
       category_id, name, sku, barcode, description, price, purchase_price,
       is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category,
-      gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url,
+      gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url,
       seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory
     } = item;
 
@@ -106,7 +107,7 @@ class MenuRepository {
         category_id = ?, name = ?, sku = ?, barcode = ?, description = ?, price = ?,
         purchase_price = ?, is_weight_based = ?, base_unit = ?, min_sale_qty = ?,
         max_sale_qty = ?, sub_category = ?, gst_rate = ?, prep_time_minutes = ?,
-        is_veg = ?, spicy_level = ?, is_available = ?, image_url = ?, seq = ?,
+        is_veg = ?, spicy_level = ?, is_available = ?, image_url = ?, barcode_image_url = COALESCE(?, barcode_image_url), seq = ?,
         kitchen_category = ?, printer_id = ?, unit = COALESCE(?, unit),
         current_stock = COALESCE(?, current_stock), low_stock_threshold = COALESCE(?, low_stock_threshold),
         track_inventory = COALESCE(?, track_inventory)
@@ -130,6 +131,7 @@ class MenuRepository {
         spicy_level !== undefined ? spicy_level : 0,
         is_available !== undefined ? is_available : 1,
         image_url || null,
+        barcode_image_url || null,
         seq !== undefined ? seq : 0,
         kitchen_category || 'Main Kitchen',
         printer_id || null,

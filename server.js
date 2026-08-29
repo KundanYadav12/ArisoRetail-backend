@@ -19,6 +19,7 @@ const agentRoutes = require('./routes/agent_routes');
 const syncRoutes = require('./routes/sync_routes');
 const profileRoutes = require('./routes/profile_routes');
 const cashierRoutes = require('./routes/cashier_routes');
+const superbillRoutes = require('./routes/superbill_routes');
 
 const { apiLimiter, authLimiter } = require('./middlewares/rate_limiter_middleware');
 
@@ -36,9 +37,13 @@ const defaultAllowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
   'http://localhost:5005',
+  'http://localhost:8081',
+  'http://localhost:19006',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:5173',
-  'http://127.0.0.1:5005'
+  'http://127.0.0.1:5005',
+  'http://127.0.0.1:8081',
+  'http://127.0.0.1:19006'
 ];
 
 const envAllowedOrigins = process.env.ALLOWED_ORIGINS
@@ -105,6 +110,7 @@ app.use('/api/settings/profile', profileRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/cashier', cashierRoutes);
+app.use('/api/superbill', superbillRoutes);
 
 const ThemeController = require('./controllers/theme_controller');
 app.get('/api/theme/config', ThemeController.getTheme);
