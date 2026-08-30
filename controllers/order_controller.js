@@ -4,6 +4,8 @@ const PrinterRepository = require('../repositories/printer_repository');
 const SuperAdminRepository = require('../repositories/superadmin_repository');
 const PrinterService = require('../services/printer_service');
 const { generateExcelWorkbook } = require('../utils/excel_helper');
+const PdfReceiptService = require('../services/pdf_receipt_service');
+const ReceiptRepository = require('../repositories/receipt_repository');
 
 class OrderController {
   static async create(req, res) {
@@ -216,6 +218,33 @@ class OrderController {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to process reprint.' });
+    }
+  }
+
+  static async getReceiptPdf(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const orderData = await OrderRepository.getById(req.params.id, restaurantId);
+      if (!orderData || !orderData.order) {
+        return res.status(404).json({ error: 'Order not found.' });
+      }
+
+      const receiptSettings = await ReceiptRepository.getByRestaurantId(restaurantId);
+      const restaurantInfo = await SuperAdminRepository.getRestaurantById(restaurantId);
+
+      const pdfBuffer = await PdfReceiptService.generate(
+        orderData.order,
+        orderData.items,
+        restaurantInfo || { name: req.user.restaurant_name || 'Retail POS' },
+        receiptSettings
+      );
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=receipt_${orderData.order.unique_order_number || orderData.order.id}.pdf`);
+      return res.send(pdfBuffer);
+    } catch (err) {
+      console.error('[getReceiptPdf error]:', err);
+      return res.status(500).json({ error: 'Failed to generate PDF receipt.' });
     }
   }
 

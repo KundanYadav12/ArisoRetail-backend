@@ -31,7 +31,7 @@ class AgentController {
         device_name: name,
         restaurant_id: restaurantId,
         restaurant_name: restaurant ? restaurant.name : 'Restaurant POS',
-        branch_name: restaurant ? (restaurant.branch_name || 'Main Branch') : 'Main Branch',
+        branch_name: restaurant ? (restaurant.branch_name || '') : '',
         printers: assignedPrinters
       });
     } catch (err) {

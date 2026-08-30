@@ -5,6 +5,7 @@ const OrderRepository = require('../repositories/order_repository');
 const SuperAdminRepository = require('../repositories/superadmin_repository');
 const ReceiptRepository = require('../repositories/receipt_repository');
 const DeviceRepository = require('../repositories/device_repository');
+const Jimp = require('jimp');
 
 // Low-level ESC/POS Commands
 const ESC = '\x1B';
@@ -114,9 +115,78 @@ class PrinterService {
   }
 
   /**
+   * Helper to download, resize, and convert a logo image URL to ESC/POS binary bitmap bytes
+   */
+  static async getLogoEscPosBytes(logoUrl, paperWidth) {
+    try {
+      if (!logoUrl) return Buffer.alloc(0);
+      
+      let fullUrl = logoUrl;
+      if (logoUrl.startsWith('/')) {
+        const path = require('path');
+        const fs = require('fs');
+        const localPath = path.join(__dirname, '..', logoUrl);
+        if (fs.existsSync(localPath)) {
+          fullUrl = localPath;
+        } else {
+          fullUrl = `http://localhost:5005${logoUrl}`;
+        }
+      }
+      
+      const image = await Jimp.read(fullUrl);
+      
+      const targetWidth = paperWidth === '58' ? 256 : 384; 
+      image.resize(targetWidth, Jimp.AUTO);
+      image.greyscale();
+      
+      const width = image.bitmap.width;
+      const height = image.bitmap.height;
+      
+      const widthBytes = Math.ceil(width / 8);
+      const escposData = [];
+      
+      // GS v 0 m xL xH yL yH
+      escposData.push(0x1D, 0x76, 0x30, 0x00);
+      escposData.push(widthBytes % 256, Math.floor(widthBytes / 256));
+      escposData.push(height % 256, Math.floor(height / 256));
+      
+      for (let y = 0; y < height; y++) {
+        for (let xByte = 0; xByte < widthBytes; xByte++) {
+          let byteVal = 0;
+          for (let bit = 0; bit < 8; bit++) {
+            const x = xByte * 8 + bit;
+            let pixelVal = 0xFF;
+            if (x < width) {
+              const color = image.getPixelColor(x, y);
+              const rgba = Jimp.intToRGBA(color);
+              const brightness = (rgba.r + rgba.g + rgba.b) / 3;
+              if (brightness < 128 && rgba.a > 50) {
+                pixelVal = 0x00;
+              }
+            }
+            if (pixelVal === 0x00) {
+              byteVal |= (1 << (7 - bit));
+            }
+          }
+          escposData.push(byteVal);
+        }
+      }
+      
+      return Buffer.concat([
+        Buffer.from('\x1Ba\x01'), 
+        Buffer.from(escposData),
+        Buffer.from('\n\x1Ba\x00')
+      ]);
+    } catch (err) {
+      console.warn('[Printer Logo Error] Failed to generate logo bytes:', err.message);
+      return Buffer.alloc(0);
+    }
+  }
+
+  /**
    * Build dynamic in-memory ESC/POS payload for Order Receipt
    */
-  static buildReceiptPayload(order, items, restaurant, printer, receiptSettings = null) {
+  static async buildReceiptPayload(order, items, restaurant, printer, receiptSettings = null) {
     const s = receiptSettings || {};
     const paperWidth = s.paper_size === '58mm' ? '58' : (printer ? printer.paper_width : '80');
     const cols = this.getWidthCols(paperWidth);
@@ -138,7 +208,9 @@ class PrinterService {
     }
     cmds += restName.toUpperCase() + '\n' + CMD_FONT_NORMAL + CMD_BOLD_OFF;
 
-    if (s.branch_name) cmds += `${s.branch_name}\n`;
+    if (s.branch_name && s.branch_name.trim()) {
+      cmds += s.branch_name.trim() + '\n';
+    }
     const addr = s.address !== undefined ? s.address : restaurant.address;
     if (addr) cmds += addr + '\n';
     
@@ -335,7 +407,15 @@ class PrinterService {
       cmds += CMD_CASH_DRAWER;
     }
 
-    return Buffer.from(cmds, printer && printer.character_encoding === 'PC437' ? 'ascii' : 'utf-8');
+    const textBuffer = Buffer.from(cmds, printer && printer.character_encoding === 'PC437' ? 'ascii' : 'utf-8');
+
+    // Fetch and prepend logo ESC/POS bytes if enabled
+    let logoBuffer = Buffer.alloc(0);
+    if (s.show_logo !== 0 && s.logo_url) {
+      logoBuffer = await this.getLogoEscPosBytes(s.logo_url, paperWidth);
+    }
+
+    return Buffer.concat([logoBuffer, textBuffer]);
   }
 
   /**
@@ -447,7 +527,7 @@ class PrinterService {
 
       if (finalActions.includes('RECEIPT') && order && restaurant) {
         const receiptPrinter = await PrinterRepository.getDefaultReceiptPrinter(restaurantId);
-        const receiptBuffer = this.buildReceiptPayload(order, items, restaurant, receiptPrinter, receiptSettings);
+        const receiptBuffer = await this.buildReceiptPayload(order, items, restaurant, receiptPrinter, receiptSettings);
         
         const jobId = await PrintQueueRepository.enqueue({
           restaurant_id: restaurantId,
@@ -525,12 +605,11 @@ class PrinterService {
         return;
       }
 
-      // Build in-memory Buffer payload
       let bufferPayload;
       if (job.print_type === 'KOT') {
         bufferPayload = this.buildKOTPayload(order, items, job, receiptSettings);
       } else {
-        bufferPayload = this.buildReceiptPayload(order, items, restaurant, job, receiptSettings);
+        bufferPayload = await this.buildReceiptPayload(order, items, restaurant, job, receiptSettings);
       }
 
       // Send to thermal printer socket

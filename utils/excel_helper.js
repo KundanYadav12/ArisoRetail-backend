@@ -71,7 +71,7 @@ async function generateGstSlabExcelWorkbook({ restaurantInfo, slabs, invoices, d
   workbook.created = new Date();
 
   const restName = restaurantInfo.restaurant_name || 'Restaurant POS';
-  const branchName = restaurantInfo.branch_name || 'Main Branch';
+  const branchName = restaurantInfo.branch_name || '';
   const gstin = restaurantInfo.gst_number || 'N/A (Unregistered)';
   const address = restaurantInfo.address || 'N/A';
 

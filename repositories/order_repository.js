@@ -465,7 +465,7 @@ class OrderRepository {
     const totalRecords = countRows[0]?.total_records || 0;
 
     // 2. Get Paginated Data Rows
-    let dataQuery = `SELECT orders.* FROM orders${whereClause} ORDER BY orders.id DESC`;
+    let dataQuery = `SELECT id, unique_order_number, subtotal, tax_amount, discount_amount, total_amount, payment_mode, order_status, cashier_name, created_at FROM orders${whereClause} ORDER BY id DESC`;
     const dataParams = [...params];
 
     const safeLimit = Math.max(1, parseInt(limit) || 20);

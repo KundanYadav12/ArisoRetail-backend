@@ -27,7 +27,7 @@ class ReceiptRepository {
     const defaultSettings = {
       restaurant_id: restaurantId,
       restaurant_name: rest.name || 'Restaurant POS',
-      branch_name: 'Main Branch',
+      branch_name: null,
       address: rest.address || '',
       phone: rest.phone || '',
       whatsapp: rest.phone || '',
@@ -36,7 +36,7 @@ class ReceiptRepository {
       gst_number: rest.gst_number || '',
       fssai_number: '',
       logo_url: '',
-      header_message: 'Welcome to Our Restaurant!',
+      header_message: 'Welcome to Our Store!',
       footer_message: 'Visit us again soon.',
       thank_you_message: 'Thank You! Visit Again.',
       terms_conditions: 'Goods once sold cannot be returned.',

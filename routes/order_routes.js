@@ -14,6 +14,7 @@ router.get('/history/export-csv', OrderController.exportHistory);
 router.get('/history/export', OrderController.exportHistory);
 router.get('/shift-summary', OrderController.getShiftSummary);
 router.get('/:id', OrderController.getById);
+router.get('/:id/pdf', OrderController.getReceiptPdf);
 router.post('/:id/reprint', OrderController.reprint);
 router.put('/:id/kitchen-status', OrderController.updateKitchenStatus);
 

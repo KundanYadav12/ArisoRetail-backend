@@ -6,6 +6,25 @@ const SuperAdminRepository = require('../repositories/superadmin_repository');
 const PrinterRepository = require('../repositories/printer_repository');
 const PrinterService = require('../services/printer_service');
 
+// GET /api/settings/receipt/logo-bytes - Fetch base64 ESC/POS logo bytes
+router.get('/logo-bytes', authenticateToken, async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurant_id || 1;
+    const settings = await ReceiptRepository.getByRestaurantId(restaurantId);
+    if (!settings || settings.show_logo === 0 || !settings.logo_url) {
+      return res.json({ bytes: '' });
+    }
+
+    const paperWidth = req.query.paper_width === '58mm' ? '58' : '80';
+    const logoBuffer = await PrinterService.getLogoEscPosBytes(settings.logo_url, paperWidth);
+    
+    return res.json({ bytes: logoBuffer.toString('base64') });
+  } catch (err) {
+    console.error('Fetch receipt logo bytes error:', err);
+    return res.status(500).json({ error: 'Failed to build receipt logo bytes: ' + err.message });
+  }
+});
+
 // GET /api/settings/receipt - Fetch settings
 router.get('/', authenticateToken, async (req, res) => {
   try {

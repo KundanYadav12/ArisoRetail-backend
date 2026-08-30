@@ -82,11 +82,11 @@ class ProfileController {
         ]
       );
 
-      // Sync name & logo in receipt_settings table so receipt, KOT, and POS stay in sync!
+      // Sync name in receipt_settings table so receipt, KOT, and POS stay in sync!
       try {
         await pool.query(
-          'UPDATE receipt_settings SET restaurant_name = ?, logo_url = ? WHERE restaurant_id = ?',
-          [newName, newLogo, restaurantId]
+          'UPDATE receipt_settings SET restaurant_name = ? WHERE restaurant_id = ?',
+          [newName, restaurantId]
         );
       } catch (err) {
         console.warn('[Profile Controller] receipt_settings sync warning:', err.message);
