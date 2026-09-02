@@ -6,7 +6,6 @@ class MenuController {
     try {
       const restaurantId = req.user.restaurant_id;
       const userAgent = req.headers['user-agent'] || 'unknown';
-      console.log(`[GET /api/menu] User ID: ${req.user.id}, Restaurant ID: ${restaurantId}, Role: ${req.user.role}, User-Agent: ${userAgent}`);
       
       const filters = {
         category_id: req.query.category_id,
@@ -18,8 +17,19 @@ class MenuController {
       };
       
       const items = await MenuRepository.getAll(restaurantId, filters);
-      console.log(`[GET /api/menu] Success — Returned ${items ? items.length : 0} item(s) for restaurant_id ${restaurantId}`);
-      return res.json(items);
+      const enhanced = (items || []).map(item => {
+        const isWeight = item.is_weight_based === 1 || item.is_weight_based === true || item.is_weight_based === '1';
+        return {
+          ...item,
+          is_weight_based: isWeight ? 1 : 0,
+          item_type: isWeight ? 'WEIGHT' : 'PCS',
+          itemType: isWeight ? 'WEIGHT' : 'PCS',
+          unit: item.unit || (isWeight ? 'kg' : 'pcs'),
+          base_unit: item.base_unit || item.unit || (isWeight ? 'kg' : 'pcs')
+        };
+      });
+      console.log(`[GET /api/menu] Success — Returned ${enhanced.length} item(s) for restaurant_id ${restaurantId}`);
+      return res.json(enhanced);
     } catch (err) {
       console.error('[GET /api/menu Error]', err);
       return res.status(500).json({ error: 'Failed to fetch menu items.' });
@@ -33,7 +43,15 @@ class MenuController {
       if (!item) {
         return res.status(404).json({ error: 'Menu item not found.' });
       }
-      return res.json(item);
+      const isWeight = item.is_weight_based === 1 || item.is_weight_based === true || item.is_weight_based === '1';
+      return res.json({
+        ...item,
+        is_weight_based: isWeight ? 1 : 0,
+        item_type: isWeight ? 'WEIGHT' : 'PCS',
+        itemType: isWeight ? 'WEIGHT' : 'PCS',
+        unit: item.unit || (isWeight ? 'kg' : 'pcs'),
+        base_unit: item.base_unit || item.unit || (isWeight ? 'kg' : 'pcs')
+      });
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to fetch menu item.' });
@@ -52,6 +70,31 @@ class MenuController {
         image_url = req.body.image_url;
       }
 
+      const parseWeightBased = (body, defaultVal = 0) => {
+        if (!body) return defaultVal;
+        // 1. Explicit item_type / itemType string from UI / API
+        const it = body.item_type || body.itemType || body.unitType || body.unit_type;
+        if (it !== undefined && it !== null && it !== '') {
+          const s = String(it).toUpperCase().trim();
+          if (s === 'WEIGHT' || s === 'KG' || s === 'GRAM' || s === '1' || s === 'TRUE') return 1;
+          if (s === 'PCS' || s === 'COUNT' || s === 'PIECE' || s === 'PIECES' || s === '0' || s === 'FALSE') return 0;
+        }
+        // 2. is_weight_based boolean/number/string
+        if (body.is_weight_based !== undefined && body.is_weight_based !== null && body.is_weight_based !== '') {
+          const v = body.is_weight_based;
+          if (v === 1 || v === '1' || v === true || v === 'true' || v === 'WEIGHT' || v === 'weight') return 1;
+          if (v === 0 || v === '0' || v === false || v === 'false' || v === 'PCS' || v === 'pcs' || v === 'COUNT' || v === 'count') return 0;
+        }
+        // 3. Check unit string
+        const u = String(body.base_unit || body.unit || '').toLowerCase().trim();
+        if (['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(u)) return 1;
+        if (['pcs', 'box', 'pack', 'bottle', 'piece', 'pieces', 'count'].includes(u)) return 0;
+        return defaultVal;
+      };
+
+      const isWeight = parseWeightBased(req.body, 0);
+      const unitVal = req.body.base_unit || req.body.unit || (isWeight === 1 ? 'kg' : 'pcs');
+
       const itemData = {
         category_id: parseInt(req.body.category_id),
         name: req.body.name,
@@ -60,12 +103,12 @@ class MenuController {
         description: req.body.description,
         price: parseFloat(req.body.price),
         purchase_price: parseFloat(req.body.purchase_price || 0),
-        is_weight_based: parseInt(req.body.is_weight_based ? 1 : 0),
-        base_unit: req.body.base_unit || req.body.unit || 'pcs',
+        is_weight_based: isWeight,
+        base_unit: unitVal,
         min_sale_qty: parseFloat(req.body.min_sale_qty || 0.001),
         max_sale_qty: parseFloat(req.body.max_sale_qty || 1000.000),
         sub_category: req.body.sub_category || null,
-        unit: req.body.base_unit || req.body.unit || 'pcs',
+        unit: unitVal,
         current_stock: parseFloat(req.body.current_stock || req.body.stock_quantity || 100),
         low_stock_threshold: parseFloat(req.body.low_stock_threshold || 10),
         track_inventory: parseInt(req.body.track_inventory !== undefined ? req.body.track_inventory : 1),
@@ -84,6 +127,8 @@ class MenuController {
       if (!itemData.category_id || !itemData.name || isNaN(itemData.price)) {
         return res.status(400).json({ error: 'Category ID, Item Name, and valid Price are required.' });
       }
+
+      console.log(`[CREATE MENU ITEM] "${itemData.name}" -> is_weight_based: ${itemData.is_weight_based} (${itemData.is_weight_based === 1 ? 'WEIGHT' : 'PCS'}), unit: "${itemData.unit}"`);
 
       const itemId = await MenuRepository.create(restaurantId, itemData);
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'MENU_CREATE', `Created menu item: ${itemData.name} (ID: ${itemId})`, req.ip);
@@ -113,6 +158,31 @@ class MenuController {
         image_url = req.body.image_url;
       }
 
+      const parseWeightBased = (body, defaultVal = 0) => {
+        if (!body) return defaultVal;
+        // 1. Explicit item_type / itemType string from UI / API
+        const it = body.item_type || body.itemType || body.unitType || body.unit_type;
+        if (it !== undefined && it !== null && it !== '') {
+          const s = String(it).toUpperCase().trim();
+          if (s === 'WEIGHT' || s === 'KG' || s === 'GRAM' || s === '1' || s === 'TRUE') return 1;
+          if (s === 'PCS' || s === 'COUNT' || s === 'PIECE' || s === 'PIECES' || s === '0' || s === 'FALSE') return 0;
+        }
+        // 2. is_weight_based boolean/number/string
+        if (body.is_weight_based !== undefined && body.is_weight_based !== null && body.is_weight_based !== '') {
+          const v = body.is_weight_based;
+          if (v === 1 || v === '1' || v === true || v === 'true' || v === 'WEIGHT' || v === 'weight') return 1;
+          if (v === 0 || v === '0' || v === false || v === 'false' || v === 'PCS' || v === 'pcs' || v === 'COUNT' || v === 'count') return 0;
+        }
+        // 3. Check unit string
+        const u = String(body.base_unit || body.unit || '').toLowerCase().trim();
+        if (['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(u)) return 1;
+        if (['pcs', 'box', 'pack', 'bottle', 'piece', 'pieces', 'count'].includes(u)) return 0;
+        return defaultVal;
+      };
+
+      const isWeight = parseWeightBased(req.body, existingItem.is_weight_based || 0);
+      const unitVal = req.body.base_unit || req.body.unit || (isWeight === 1 ? 'kg' : 'pcs');
+
       const itemData = {
         category_id: parseInt(req.body.category_id !== undefined ? req.body.category_id : existingItem.category_id),
         name: req.body.name || existingItem.name,
@@ -121,12 +191,12 @@ class MenuController {
         description: req.body.description !== undefined ? req.body.description : existingItem.description,
         price: parseFloat(req.body.price !== undefined ? req.body.price : existingItem.price),
         purchase_price: parseFloat(req.body.purchase_price !== undefined ? req.body.purchase_price : existingItem.purchase_price || 0),
-        is_weight_based: parseInt(req.body.is_weight_based !== undefined ? (req.body.is_weight_based ? 1 : 0) : existingItem.is_weight_based || 0),
-        base_unit: req.body.base_unit || req.body.unit || existingItem.base_unit || existingItem.unit || 'pcs',
+        is_weight_based: isWeight,
+        base_unit: unitVal,
         min_sale_qty: parseFloat(req.body.min_sale_qty !== undefined ? req.body.min_sale_qty : existingItem.min_sale_qty || 0.001),
         max_sale_qty: parseFloat(req.body.max_sale_qty !== undefined ? req.body.max_sale_qty : existingItem.max_sale_qty || 1000.000),
         sub_category: req.body.sub_category !== undefined ? req.body.sub_category : existingItem.sub_category,
-        unit: req.body.base_unit || req.body.unit || existingItem.unit || 'pcs',
+        unit: unitVal,
         current_stock: parseFloat(req.body.current_stock !== undefined ? req.body.current_stock : existingItem.current_stock || 100),
         low_stock_threshold: parseFloat(req.body.low_stock_threshold !== undefined ? req.body.low_stock_threshold : existingItem.low_stock_threshold || 10),
         track_inventory: parseInt(req.body.track_inventory !== undefined ? req.body.track_inventory : existingItem.track_inventory || 1),
@@ -141,6 +211,8 @@ class MenuController {
         kitchen_category: req.body.kitchen_category || existingItem.kitchen_category,
         printer_id: req.body.printer_id !== undefined ? (req.body.printer_id ? parseInt(req.body.printer_id) : null) : existingItem.printer_id
       };
+
+      console.log(`[UPDATE MENU ITEM #${itemId}] "${itemData.name}" -> is_weight_based: ${itemData.is_weight_based} (${itemData.is_weight_based === 1 ? 'WEIGHT' : 'PCS'}), unit: "${itemData.unit}"`);
 
       const success = await MenuRepository.update(itemId, restaurantId, itemData);
       if (!success) {
