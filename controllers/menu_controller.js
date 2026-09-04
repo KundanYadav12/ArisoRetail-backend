@@ -482,10 +482,22 @@ class MenuController {
       const categoryMap = new Map();
       existingCategories.forEach(c => categoryMap.set(c.name.toLowerCase().trim(), c.id));
 
-      // 2. Load existing items
+      // Helper to generate unique composite item key for duplicate matching:
+      // - Same Name + Different SKU => different keys => imported as separate items
+      // - Same Name + Same SKU => same key => treated as existing item without creating duplicates
+      const getBulkItemKey = (catId, name, sku) => {
+        const normCat = catId !== undefined && catId !== null ? String(catId).trim() : '';
+        const normName = String(name || '').toLowerCase().trim();
+        const normSku = String(sku || '').toLowerCase().trim();
+        return `${normCat}__${normName}__${normSku}`;
+      };
+
+      // 2. Load existing items mapped by (Category + Name + SKU)
       const existingItems = await MenuRepository.getAll(restaurantId, {});
       const itemMap = new Map();
-      existingItems.forEach(i => itemMap.set(`${i.category_id}_${i.name.toLowerCase().trim()}`, i.id));
+      existingItems.forEach(i => {
+        itemMap.set(getBulkItemKey(i.category_id, i.name, i.sku), i.id);
+      });
 
       let added = 0;
       let updated = 0;
@@ -579,7 +591,8 @@ class MenuController {
           }
         }
 
-        const itemKey = `${categoryId}_${data.itemNameRaw.toLowerCase()}`;
+        const skuClean = data.sku ? String(data.sku).trim().slice(0, 50) : '';
+        const itemKey = getBulkItemKey(categoryId, data.itemNameRaw, skuClean);
         const existingItemId = itemMap.get(itemKey);
 
         const itemData = {
@@ -593,7 +606,7 @@ class MenuController {
           is_veg: data.isVeg,
           spicy_level: data.spicyLevel,
           description: data.description,
-          sku: data.sku,
+          sku: skuClean || null,
           is_available: data.isAvailable
         };
 
@@ -677,9 +690,21 @@ class MenuController {
       const categoryMap = new Map();
       existingCategories.forEach(c => categoryMap.set(c.name.toLowerCase().trim(), c.id));
 
+      // Helper to generate unique composite item key for duplicate matching:
+      // - Same Name + Different SKU => different keys => imported as separate items
+      // - Same Name + Same SKU => same key => treated as existing item without creating duplicates
+      const getBulkItemKey = (catId, name, sku) => {
+        const normCat = catId !== undefined && catId !== null ? String(catId).trim() : '';
+        const normName = String(name || '').toLowerCase().trim();
+        const normSku = String(sku || '').toLowerCase().trim();
+        return `${normCat}__${normName}__${normSku}`;
+      };
+
       const existingItems = await MenuRepository.getAll(restaurantId, {});
       const itemMap = new Map();
-      existingItems.forEach(i => itemMap.set(`${i.category_id}_${i.name.toLowerCase().trim()}`, i.id));
+      existingItems.forEach(i => {
+        itemMap.set(getBulkItemKey(i.category_id, i.name, i.sku), i.id);
+      });
 
       let added = 0;
       let updated = 0;
@@ -703,18 +728,27 @@ class MenuController {
           categoriesCreated++;
         }
 
-        const itemKey = `${categoryId}_${itemNameRaw.toLowerCase()}`;
+        const skuVal = item.sku ? String(item.sku).trim().slice(0, 50) : '';
+        const itemKey = getBulkItemKey(categoryId, itemNameRaw, skuVal);
         const existingItemId = itemMap.get(itemKey);
+
+        const isWeight = item.is_weight_based !== undefined
+          ? (item.is_weight_based === 1 || item.is_weight_based === true || item.is_weight_based === '1' || item.is_weight_based === 'WEIGHT' ? 1 : 0)
+          : (['kg', 'gram', 'litre', 'ml'].includes(String(item.unit || item.base_unit || item.serving_unit || '').toLowerCase()) ? 1 : 0);
+        const unitVal = item.base_unit || item.unit || item.serving_unit || (isWeight === 1 ? 'kg' : 'pcs');
 
         const itemData = {
           category_id: categoryId,
           name: itemNameRaw,
           price,
           gst_rate: parseFloat(item.gst_rate || 5),
+          base_unit: unitVal,
+          unit: unitVal,
+          is_weight_based: isWeight,
           is_veg: parseInt(item.is_veg !== undefined ? item.is_veg : 1),
           spicy_level: parseInt(item.spicy_level || 0),
           description: String(item.description || '').slice(0, 2000),
-          sku: String(item.sku || '').slice(0, 50),
+          sku: skuVal || null,
           is_available: parseInt(item.is_available !== undefined ? item.is_available : 1)
         };
 
