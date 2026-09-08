@@ -212,6 +212,7 @@ async function initDBSchema() {
         kot_footer_note VARCHAR(255) DEFAULT 'Prepare with priority',
         show_kot_order_notes TINYINT(1) DEFAULT 1,
         show_kot_time TINYINT(1) DEFAULT 1,
+        enter_key_qty_popup TINYINT(1) DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

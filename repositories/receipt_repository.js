@@ -64,6 +64,7 @@ class ReceiptRepository {
       whatsapp_business_phone: '',
       enable_stage2_popup: 1,
       gst_enabled: 1,
+      enter_key_qty_popup: 1,
       // Stage 1 popup button toggles
       stage1_popup_save_only: 1,
       stage1_popup_receipt_only: 1,
@@ -84,10 +85,10 @@ class ReceiptRepository {
         show_customer_details, show_cashier_name, show_tax_details, show_payment_details,
         show_footer_notes, kot_header, kitchen_name, kot_footer_note, show_kot_order_notes, show_kot_time,
         gst_mode, default_gst_rate, print_stage1_mode, print_stage2_mode, allow_cashier_view_all_reports,
-        enable_whatsapp_receipt, whatsapp_business_phone, enable_stage2_popup, gst_enabled,
+        enable_whatsapp_receipt, whatsapp_business_phone, enable_stage2_popup, gst_enabled, enter_key_qty_popup,
         stage1_popup_save_only, stage1_popup_receipt_only, stage1_popup_kot_only, stage1_popup_kot_receipt,
         stage2_popup_save_only, stage2_popup_receipt_only, stage2_popup_kot_only, stage2_popup_kot_receipt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         restaurantId, defaultSettings.restaurant_name, defaultSettings.branch_name, defaultSettings.address,
         defaultSettings.phone, defaultSettings.whatsapp, defaultSettings.email, defaultSettings.website,
@@ -101,7 +102,7 @@ class ReceiptRepository {
         defaultSettings.gst_mode, defaultSettings.default_gst_rate, defaultSettings.print_stage1_mode,
         defaultSettings.print_stage2_mode, defaultSettings.allow_cashier_view_all_reports,
         defaultSettings.enable_whatsapp_receipt, defaultSettings.whatsapp_business_phone, defaultSettings.enable_stage2_popup,
-        defaultSettings.gst_enabled,
+        defaultSettings.gst_enabled, defaultSettings.enter_key_qty_popup,
         defaultSettings.stage1_popup_save_only, defaultSettings.stage1_popup_receipt_only,
         defaultSettings.stage1_popup_kot_only, defaultSettings.stage1_popup_kot_receipt,
         defaultSettings.stage2_popup_save_only, defaultSettings.stage2_popup_receipt_only,
@@ -141,7 +142,7 @@ class ReceiptRepository {
       'show_tax_details', 'show_payment_details', 'show_footer_notes',
       'kot_header', 'kitchen_name', 'kot_footer_note', 'show_kot_order_notes', 'show_kot_time',
       'gst_mode', 'default_gst_rate', 'print_stage1_mode', 'print_stage2_mode', 'allow_cashier_view_all_reports',
-      'enable_whatsapp_receipt', 'whatsapp_business_phone', 'enable_stage2_popup', 'gst_enabled',
+      'enable_whatsapp_receipt', 'whatsapp_business_phone', 'enable_stage2_popup', 'gst_enabled', 'enter_key_qty_popup',
       'stage1_popup_save_only', 'stage1_popup_receipt_only', 'stage1_popup_kot_only', 'stage1_popup_kot_receipt',
       'stage2_popup_save_only', 'stage2_popup_receipt_only', 'stage2_popup_kot_only', 'stage2_popup_kot_receipt'
     ];
