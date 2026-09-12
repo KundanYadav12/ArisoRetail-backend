@@ -142,7 +142,7 @@ class ReceiptRepository {
       'show_tax_details', 'show_payment_details', 'show_footer_notes',
       'kot_header', 'kitchen_name', 'kot_footer_note', 'show_kot_order_notes', 'show_kot_time',
       'gst_mode', 'default_gst_rate', 'print_stage1_mode', 'print_stage2_mode', 'allow_cashier_view_all_reports',
-      'enable_whatsapp_receipt', 'whatsapp_business_phone', 'enable_stage2_popup', 'gst_enabled', 'enter_key_qty_popup',
+      'enable_whatsapp_receipt', 'whatsapp_business_phone', 'enable_stage2_popup', 'gst_enabled', 'enter_key_qty_popup', 'cart_position',
       'stage1_popup_save_only', 'stage1_popup_receipt_only', 'stage1_popup_kot_only', 'stage1_popup_kot_receipt',
       'stage2_popup_save_only', 'stage2_popup_receipt_only', 'stage2_popup_kot_only', 'stage2_popup_kot_receipt'
     ];

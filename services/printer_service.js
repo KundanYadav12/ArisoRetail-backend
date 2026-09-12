@@ -330,6 +330,11 @@ class PrinterService {
 
     const totalVal = isNaN(parseFloat(order.total_amount)) ? 0 : parseFloat(order.total_amount);
 
+    const totalItemsCount = items ? items.length : 0;
+    const totalQtySum = (items || []).reduce((acc, it) => acc + (it.is_weight_based ? parseFloat(it.item_weight || 1) : (parseFloat(it.quantity ?? it.qty ?? 1) || 1)), 0);
+    const formattedQty = totalQtySum % 1 === 0 ? totalQtySum : parseFloat(totalQtySum.toFixed(3));
+    cmds += `Total Items: ${totalItemsCount} | Total Qty: ${formattedQty}\n`;
+
     cmds += PrinterService.formatTwoColumns('Subtotal:', `Rs. ${subtotalVal.toFixed(2)}`, cols) + '\n';
     if (discountVal > 0) {
       const discLabel = order.discount_type === 'percentage' ? `Discount (${order.discount_value}%):` : 'Discount:';
@@ -393,11 +398,18 @@ class PrinterService {
 
     // Footer
     cmds += CMD_ALIGN_CENTER;
-    const thankYou = s.thank_you_message || 'Thank You! Visit Again.';
-    cmds += thankYou + '\n';
-    if (s.footer_message) cmds += `${s.footer_message}\n`;
-    if (s.terms_conditions) cmds += `T&C: ${s.terms_conditions}\n`;
-    cmds += '\n\n';
+    const thankYou = (s.thank_you_message !== undefined ? s.thank_you_message : (restaurant.thank_you_message || 'Thank You! Visit Again.') || '').trim();
+    if (thankYou) cmds += thankYou + '\n';
+    const footerMsg = (s.footer_message || restaurant.footer_message || '').trim();
+    if (footerMsg) cmds += `${footerMsg}\n`;
+    
+    const rawTerms = s.terms_conditions !== undefined ? s.terms_conditions : (s.terms_and_conditions !== undefined ? s.terms_and_conditions : (restaurant.terms_conditions || ''));
+    const terms = (rawTerms || '').trim();
+    if (terms) {
+      cmds += divider;
+      cmds += `T&C: ${terms}\n`;
+    }
+    cmds += '\n\n\n\n\n';
 
     // Auto Cut & Cash Drawer Kick
     if (!printer || printer.auto_cut !== 0) {
