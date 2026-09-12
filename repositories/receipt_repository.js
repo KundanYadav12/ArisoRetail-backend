@@ -36,6 +36,7 @@ class ReceiptRepository {
       gst_number: rest.gst_number || '',
       fssai_number: '',
       logo_url: '',
+      qr_code_url: '',
       header_message: 'Welcome to Our Store!',
       footer_message: 'Visit us again soon.',
       thank_you_message: 'Thank You! Visit Again.',
@@ -80,7 +81,7 @@ class ReceiptRepository {
     await pool.query(
       `INSERT INTO receipt_settings (
         restaurant_id, restaurant_name, branch_name, address, phone, whatsapp, email, website,
-        gst_number, fssai_number, logo_url, header_message, footer_message, thank_you_message,
+        gst_number, fssai_number, logo_url, qr_code_url, header_message, footer_message, thank_you_message,
         terms_conditions, paper_size, font_size, header_alignment, show_logo, show_qr_code,
         show_customer_details, show_cashier_name, show_tax_details, show_payment_details,
         show_footer_notes, kot_header, kitchen_name, kot_footer_note, show_kot_order_notes, show_kot_time,
@@ -88,11 +89,11 @@ class ReceiptRepository {
         enable_whatsapp_receipt, whatsapp_business_phone, enable_stage2_popup, gst_enabled, enter_key_qty_popup,
         stage1_popup_save_only, stage1_popup_receipt_only, stage1_popup_kot_only, stage1_popup_kot_receipt,
         stage2_popup_save_only, stage2_popup_receipt_only, stage2_popup_kot_only, stage2_popup_kot_receipt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         restaurantId, defaultSettings.restaurant_name, defaultSettings.branch_name, defaultSettings.address,
         defaultSettings.phone, defaultSettings.whatsapp, defaultSettings.email, defaultSettings.website,
-        defaultSettings.gst_number, defaultSettings.fssai_number, defaultSettings.logo_url, defaultSettings.header_message,
+        defaultSettings.gst_number, defaultSettings.fssai_number, defaultSettings.logo_url, defaultSettings.qr_code_url, defaultSettings.header_message,
         defaultSettings.footer_message, defaultSettings.thank_you_message, defaultSettings.terms_conditions,
         defaultSettings.paper_size, defaultSettings.font_size, defaultSettings.header_alignment,
         defaultSettings.show_logo, defaultSettings.show_qr_code, defaultSettings.show_customer_details,
@@ -136,7 +137,7 @@ class ReceiptRepository {
 
     const fields = [
       'restaurant_name', 'branch_name', 'address', 'phone', 'whatsapp', 'email', 'website',
-      'gst_number', 'fssai_number', 'logo_url', 'header_message', 'footer_message',
+      'gst_number', 'fssai_number', 'logo_url', 'qr_code_url', 'header_message', 'footer_message',
       'thank_you_message', 'terms_conditions', 'paper_size', 'font_size', 'header_alignment',
       'show_logo', 'show_qr_code', 'show_customer_details', 'show_cashier_name',
       'show_tax_details', 'show_payment_details', 'show_footer_notes',

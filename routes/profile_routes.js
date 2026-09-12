@@ -68,4 +68,7 @@ router.put('/', authenticateToken, authorizeRoles('admin', 'manager', 'super_adm
 // POST /api/settings/profile/logo
 router.post('/logo', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), uploadLogoMiddleware.single('logo'), ProfileController.uploadLogo);
 
+// POST /api/settings/profile/qr
+router.post('/qr', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), uploadLogoMiddleware.single('qr_image'), ProfileController.uploadQrCode);
+
 module.exports = router;

@@ -150,6 +150,29 @@ class ProfileController {
       return res.status(500).json({ error: 'Failed to upload logo: ' + err.message });
     }
   }
+
+  /**
+   * POST /api/settings/profile/qr or /api/settings/receipt/qr
+   * Upload QR / Barcode image file (JPG, JPEG, PNG, WEBP, SVG)
+   */
+  static async uploadQrCode(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No image file uploaded.' });
+      }
+
+      const fileUrl = `/uploads/logos/${req.file.filename}`;
+      return res.json({
+        message: 'QR / Barcode image uploaded successfully.',
+        qr_code_url: fileUrl,
+        logo_url: fileUrl,
+        filename: req.file.filename
+      });
+    } catch (err) {
+      console.error('[Upload QR Code Error]', err);
+      return res.status(500).json({ error: 'Failed to upload QR / Barcode image: ' + err.message });
+    }
+  }
 }
 
 module.exports = ProfileController;

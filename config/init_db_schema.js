@@ -193,6 +193,7 @@ async function initDBSchema() {
         gst_number VARCHAR(50) DEFAULT NULL,
         fssai_number VARCHAR(50) DEFAULT NULL,
         logo_url TEXT DEFAULT NULL,
+        qr_code_url TEXT DEFAULT NULL,
         header_message TEXT DEFAULT NULL,
         footer_message TEXT DEFAULT NULL,
         thank_you_message VARCHAR(255) DEFAULT 'Thank You! Visit Again.',

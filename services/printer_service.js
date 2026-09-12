@@ -21,6 +21,16 @@ const CMD_BOLD_OFF = ESC + 'E\x00';
 const CMD_CUT = GS + 'V\x41\x03'; // Auto paper cut
 const CMD_CASH_DRAWER = ESC + 'p\x00\x19\xFA'; // Cash drawer kick pulse
 
+function formatReceiptDateTime(dateVal) {
+  const d = dateVal ? new Date(dateVal) : new Date();
+  if (isNaN(d.getTime())) return '';
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = String(d.getFullYear()).slice(-2);
+  const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  return `${day}/${month}/${year}, ${timeStr}`;
+}
+
 class PrinterService {
   /**
    * Sends a raw in-memory Buffer payload directly to a network thermal printer TCP socket
@@ -196,6 +206,11 @@ class PrinterService {
 
     let cmds = '';
     cmds += CMD_INIT;
+
+    // Set balanced left & right margins for centered alignment on 80mm thermal receipt roll
+    if (!is58mm) {
+      cmds += GS + 'L\x24\x00'; // 36 dots (~4.5mm) left margin: 36 left + 504 text + 36 right = 576 dots total
+    }
     
     // Align header
     const alignCmd = s.header_alignment === 'left' ? CMD_ALIGN_LEFT : (s.header_alignment === 'right' ? CMD_ALIGN_RIGHT : CMD_ALIGN_CENTER);
@@ -227,17 +242,13 @@ class PrinterService {
     if (s.header_message) cmds += `\n* ${s.header_message} *\n`;
     cmds += doubleDivider;
 
-    // Order Metadata
+    // Order Metadata (Payment method line removed, Date in dd/mm/yy format)
     cmds += CMD_ALIGN_LEFT;
     cmds += `Bill No : #${order.unique_order_number}\n`;
     if (s.show_cashier_name !== 0) {
       cmds += `Cashier : ${order.cashier_name || 'Staff'}\n`;
     }
-    cmds += `Date    : ${new Date(order.created_at || Date.now()).toLocaleString()}\n`;
-    
-    if (s.show_payment_details !== 0) {
-      cmds += `Payment : ${order.payment_mode ? order.payment_mode.toUpperCase() : 'CASH'} | ${order.table_number_or_takeaway || 'Takeaway'}\n`;
-    }
+    cmds += `Date    : ${formatReceiptDateTime(order.created_at)}\n`;
 
     if (s.show_customer_details !== 0 && order.notes) {
       cmds += `Customer: ${order.notes}\n`;
@@ -427,7 +438,18 @@ class PrinterService {
       logoBuffer = await this.getLogoEscPosBytes(s.logo_url, paperWidth);
     }
 
-    return Buffer.concat([logoBuffer, textBuffer]);
+    // Fetch QR Code ESC/POS bytes if enabled
+    let qrBuffer = Buffer.alloc(0);
+    if (s.show_qr_code !== 0 && s.qr_code_url) {
+      qrBuffer = await this.getLogoEscPosBytes(s.qr_code_url, paperWidth);
+    }
+
+    let postQrBuffer = Buffer.alloc(0);
+    if (qrBuffer.length > 0) {
+      postQrBuffer = Buffer.from('\n\n\n\n\n' + ((!printer || printer.auto_cut !== 0) ? CMD_CUT : ''), printer && printer.character_encoding === 'PC437' ? 'ascii' : 'utf-8');
+    }
+
+    return Buffer.concat([logoBuffer, textBuffer, qrBuffer, postQrBuffer]);
   }
 
   /**
