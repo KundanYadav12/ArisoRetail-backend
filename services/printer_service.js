@@ -422,12 +422,13 @@ class PrinterService {
     }
     cmds += '\n\n\n\n\n';
 
-    // Auto Cut & Cash Drawer Kick
-    if (!printer || printer.auto_cut !== 0) {
-      cmds += CMD_CUT;
-    }
+    // Cash Drawer Kick
     if (printer && printer.cash_drawer === 1 && (order.payment_mode === 'cash' || order.payment_mode === 'CASH')) {
       cmds += CMD_CASH_DRAWER;
+    }
+    // Only cut here if no QR code image will be appended after
+    if ((s.show_qr_code === 0 || !s.qr_code_url) && (!printer || printer.auto_cut !== 0)) {
+      cmds += CMD_CUT;
     }
 
     const textBuffer = Buffer.from(cmds, printer && printer.character_encoding === 'PC437' ? 'ascii' : 'utf-8');
