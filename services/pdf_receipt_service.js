@@ -60,6 +60,14 @@ class PdfReceiptService {
         }
 
         // 2. Header / Branding
+        const isComposition = settings.gst_registration_type === 'composition' || order.tax_invoice_type === 'BILL_OF_SUPPLY';
+        const docTitle = isComposition ? 'BILL OF SUPPLY' : (parseFloat(order.tax_amount || 0) > 0 ? 'TAX INVOICE' : 'RETAIL INVOICE');
+
+        doc.font('Helvetica-Bold')
+           .fontSize(8)
+           .text(docTitle + (isComposition ? ' (COMPOSITION SCHEME)' : ''), { align: 'center', width: usableWidth });
+        doc.moveDown(0.2);
+
         const storeName = (settings.restaurant_name || restaurant.name || 'RETAIL STORE').toUpperCase();
         doc.font('Helvetica-Bold')
            .fontSize(10)
@@ -68,12 +76,20 @@ class PdfReceiptService {
         doc.font('Helvetica')
            .fontSize(7);
 
+        if (settings.legal_name && settings.legal_name.toUpperCase() !== storeName) {
+          doc.text(`Legal: ${settings.legal_name}`, { align: 'center', width: usableWidth });
+        }
         if (settings.branch_name) {
           doc.text(settings.branch_name, { align: 'center', width: usableWidth });
         }
         const address = settings.address || restaurant.address;
         if (address) {
           doc.text(address, { align: 'center', width: usableWidth });
+        }
+        const stateName = settings.state || restaurant.state;
+        const stateCode = settings.state_code || restaurant.state_code;
+        if (stateName) {
+          doc.text(`State: ${stateName} (${stateCode || '27'})`, { align: 'center', width: usableWidth });
         }
         const phone = settings.phone || restaurant.phone;
         if (phone) {
@@ -123,6 +139,12 @@ class PdfReceiptService {
           if (order.customer_phone) customerStr += ` (${order.customer_phone})`;
           doc.text(customerStr);
           if (order.customer_address) doc.text(`Addr: ${order.customer_address}`);
+        }
+        if (order.gst_number) {
+          doc.text(`Buyer GSTIN: ${order.gst_number}`);
+        }
+        if (order.tax_type) {
+          doc.text(`Place of Supply: ${order.tax_type === 'inter' ? 'Inter-State (IGST)' : 'Intra-State (CGST+SGST)'}`);
         }
 
         doc.moveDown(0.5);
@@ -178,7 +200,18 @@ class PdfReceiptService {
           drawTotalLine('Discount:', `Rs. ${discount}`);
         }
         if (parseFloat(tax) > 0 && settings.show_tax_details !== 0) {
-          drawTotalLine('GST/Tax:', `Rs. ${tax}`);
+          if (order.tax_type === 'inter') {
+            drawTotalLine('IGST:', `Rs. ${tax}`);
+          } else {
+            const halfTax = (parseFloat(tax) / 2).toFixed(2);
+            drawTotalLine('CGST:', `Rs. ${halfTax}`);
+            drawTotalLine('SGST:', `Rs. ${halfTax}`);
+          }
+        }
+        if (order.round_off && parseFloat(order.round_off) !== 0) {
+          const roVal = parseFloat(order.round_off);
+          const roStr = (roVal > 0 ? '+Rs. ' : '-Rs. ') + Math.abs(roVal).toFixed(2);
+          drawTotalLine('Round Off:', roStr);
         }
         
         doc.moveDown(0.2);

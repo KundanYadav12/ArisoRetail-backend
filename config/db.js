@@ -30,7 +30,9 @@ const dbConfig = {
   connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT || '20', 10),
   queueLimit: 0,
   enableKeepAlive: true,
-  keepAliveInitialDelay: 10000
+  keepAliveInitialDelay: 10000,
+  timezone: '+05:30',
+  dateStrings: true
 };
 
 // 3. Log database connection details (Password protected)
@@ -39,10 +41,16 @@ console.log(`  • Host:     ${dbConfig.host}`);
 console.log(`  • Port:     ${dbConfig.port}`);
 console.log(`  • Database: ${dbConfig.database}`);
 console.log(`  • User:     ${dbConfig.user}`);
+console.log('  • Timezone: IST (+05:30 / Asia/Kolkata)');
 console.log('  • Password: [PROTECTED]');
 
 // 4. Create MySQL connection pool
 const pool = mysql.createPool(dbConfig);
+
+// Ensure every pooled connection enforces Indian Standard Time (+05:30)
+pool.on('connection', (connection) => {
+  connection.query("SET time_zone = '+05:30'");
+});
 
 // 5. Test initial database connection on startup
 pool.getConnection()

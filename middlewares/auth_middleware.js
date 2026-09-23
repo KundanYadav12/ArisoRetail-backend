@@ -21,7 +21,7 @@ async function authenticateToken(req, res, next) {
     
     // Fetch user details to verify state
     const [rows] = await pool.execute(
-      'SELECT u.id, u.restaurant_id, u.name, u.username, u.role, u.is_active, u.active_session_id, r.subscription_status, r.subscription_expires_at, r.name as restaurant_name ' +
+      'SELECT u.id, u.restaurant_id, u.name, u.username, u.role, u.assigned_warehouse_id, u.is_active, u.active_session_id, r.subscription_status, r.subscription_expires_at, r.name as restaurant_name ' +
       'FROM users u LEFT JOIN restaurants r ON u.restaurant_id = r.id ' +
       'WHERE u.id = ? AND u.is_active = 1',
       [decoded.id]
@@ -71,6 +71,7 @@ async function authenticateToken(req, res, next) {
       name: user.name,
       username: user.username,
       role: user.role,
+      assigned_warehouse_id: user.assigned_warehouse_id || null,
       shift_id: decoded.shift_id
     };
 
@@ -135,8 +136,40 @@ function authorizeRoles(...allowedRoles) {
   };
 }
 
+/**
+ * Enforces warehouse isolation for warehouse_manager roles
+ */
+function enforceWarehouseScope(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthenticated.' });
+  }
+
+  const role = (req.user.role || '').toLowerCase();
+  if (role === 'warehouse_manager' && req.user.assigned_warehouse_id) {
+    const assignedWhId = parseInt(req.user.assigned_warehouse_id, 10);
+
+    if (req.body && req.body.warehouse_id && parseInt(req.body.warehouse_id, 10) !== assignedWhId) {
+      return res.status(403).json({ error: 'Access denied: Warehouse Manager is restricted to their assigned warehouse.' });
+    }
+    if (req.query && req.query.warehouse_id && req.query.warehouse_id !== 'all' && parseInt(req.query.warehouse_id, 10) !== assignedWhId) {
+      return res.status(403).json({ error: 'Access denied: Warehouse Manager is restricted to their assigned warehouse.' });
+    }
+
+    if (req.query && (!req.query.warehouse_id || req.query.warehouse_id === 'all')) {
+      req.query.warehouse_id = assignedWhId;
+    }
+    if (req.body && !req.body.warehouse_id) {
+      req.body.warehouse_id = assignedWhId;
+    }
+  }
+
+  next();
+}
+
 module.exports = {
   authenticateToken,
   optionalAuthenticateToken,
-  authorizeRoles
+  authorizeRoles,
+  enforceWarehouseScope
 };
+

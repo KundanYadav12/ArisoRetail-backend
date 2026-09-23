@@ -14,13 +14,17 @@ class InventoryRepository {
         COALESCE(c.name, 'Uncategorized') as category_name,
         mi.category_id,
         COALESCE(mi.unit, 'pcs') as unit,
-        COALESCE(mi.current_stock, 100.00) as current_stock,
-        COALESCE(mi.low_stock_threshold, 10.00) as low_stock_threshold,
+        COALESCE(mi.is_weight_based, 0) as is_weight_based,
+        COALESCE(mi.current_stock, 100.000) as current_stock,
+        COALESCE(mi.reserved_stock, 0.000) as reserved_stock,
+        GREATEST(0, COALESCE(mi.current_stock, 100.000) - COALESCE(mi.reserved_stock, 0.000)) as available_stock,
+        COALESCE(mi.low_stock_threshold, 10.000) as low_stock_threshold,
         COALESCE(mi.track_inventory, 1) as track_inventory,
+        mi.barcode_image_url,
         mi.updated_at,
         CASE
-          WHEN COALESCE(mi.current_stock, 0) <= 0 THEN 'out_of_stock'
-          WHEN COALESCE(mi.current_stock, 0) <= COALESCE(mi.low_stock_threshold, 10) THEN 'low_stock'
+          WHEN GREATEST(0, COALESCE(mi.current_stock, 0) - COALESCE(mi.reserved_stock, 0)) <= 0 THEN 'out_of_stock'
+          WHEN GREATEST(0, COALESCE(mi.current_stock, 0) - COALESCE(mi.reserved_stock, 0)) <= COALESCE(mi.low_stock_threshold, 10) THEN 'low_stock'
           ELSE 'in_stock'
         END as stock_status
       FROM menu_items mi
@@ -41,11 +45,11 @@ class InventoryRepository {
     }
 
     if (status === 'out_of_stock') {
-      query += ' AND COALESCE(mi.current_stock, 0) <= 0';
+      query += ' AND GREATEST(0, COALESCE(mi.current_stock, 0) - COALESCE(mi.reserved_stock, 0)) <= 0';
     } else if (status === 'low_stock') {
-      query += ' AND COALESCE(mi.current_stock, 0) > 0 AND COALESCE(mi.current_stock, 0) <= COALESCE(mi.low_stock_threshold, 10)';
+      query += ' AND GREATEST(0, COALESCE(mi.current_stock, 0) - COALESCE(mi.reserved_stock, 0)) > 0 AND GREATEST(0, COALESCE(mi.current_stock, 0) - COALESCE(mi.reserved_stock, 0)) <= COALESCE(mi.low_stock_threshold, 10)';
     } else if (status === 'in_stock') {
-      query += ' AND COALESCE(mi.current_stock, 0) > COALESCE(mi.low_stock_threshold, 10)';
+      query += ' AND GREATEST(0, COALESCE(mi.current_stock, 0) - COALESCE(mi.reserved_stock, 0)) > COALESCE(mi.low_stock_threshold, 10)';
     }
 
     query += ' ORDER BY stock_status ASC, mi.name ASC';
@@ -56,9 +60,9 @@ class InventoryRepository {
     const [summaryRows] = await pool.execute(`
       SELECT 
         COUNT(id) as total_items,
-        SUM(CASE WHEN COALESCE(current_stock, 0) > COALESCE(low_stock_threshold, 10) THEN 1 ELSE 0 END) as in_stock_count,
-        SUM(CASE WHEN COALESCE(current_stock, 0) > 0 AND COALESCE(current_stock, 0) <= COALESCE(low_stock_threshold, 10) THEN 1 ELSE 0 END) as low_stock_count,
-        SUM(CASE WHEN COALESCE(current_stock, 0) <= 0 THEN 1 ELSE 0 END) as out_of_stock_count
+        SUM(CASE WHEN GREATEST(0, COALESCE(current_stock, 0) - COALESCE(reserved_stock, 0)) > COALESCE(low_stock_threshold, 10) THEN 1 ELSE 0 END) as in_stock_count,
+        SUM(CASE WHEN GREATEST(0, COALESCE(current_stock, 0) - COALESCE(reserved_stock, 0)) > 0 AND GREATEST(0, COALESCE(current_stock, 0) - COALESCE(reserved_stock, 0)) <= COALESCE(low_stock_threshold, 10) THEN 1 ELSE 0 END) as low_stock_count,
+        SUM(CASE WHEN GREATEST(0, COALESCE(current_stock, 0) - COALESCE(reserved_stock, 0)) <= 0 THEN 1 ELSE 0 END) as out_of_stock_count
       FROM menu_items
       WHERE restaurant_id = ?
     `, [restaurantId]);

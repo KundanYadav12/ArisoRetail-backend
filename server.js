@@ -1,3 +1,4 @@
+process.env.TZ = 'Asia/Kolkata';
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -20,6 +21,13 @@ const syncRoutes = require('./routes/sync_routes');
 const profileRoutes = require('./routes/profile_routes');
 const cashierRoutes = require('./routes/cashier_routes');
 const superbillRoutes = require('./routes/superbill_routes');
+const customerRoutes = require('./routes/customer_routes');
+const deliveryChallanRoutes = require('./routes/delivery_challan_routes');
+const gstRoutes = require('./routes/gst_routes');
+const financeRoutes = require('./routes/financial_account_routes');
+const expenseRoutes = require('./routes/expense_routes');
+const dayEndRoutes = require('./routes/day_end_routes');
+const paymentReconciliationRoutes = require('./routes/payment_reconciliation_routes');
 
 const { apiLimiter, authLimiter } = require('./middlewares/rate_limiter_middleware');
 
@@ -111,6 +119,13 @@ app.use('/api/agent', agentRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/cashier', cashierRoutes);
 app.use('/api/superbill', superbillRoutes);
+app.use('/api/customers', customerRoutes);
+app.use('/api/delivery-challans', deliveryChallanRoutes);
+app.use('/api/gst', gstRoutes);
+app.use('/api/finance', financeRoutes);
+app.use('/api/expenses', expenseRoutes);
+app.use('/api/day-end', dayEndRoutes);
+app.use('/api/payment-reconciliation', paymentReconciliationRoutes);
 
 const ThemeController = require('./controllers/theme_controller');
 app.get('/api/theme/config', ThemeController.getTheme);

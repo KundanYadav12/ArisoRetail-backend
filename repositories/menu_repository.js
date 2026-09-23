@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { formatLocalDate } = require('../utils/date_utils');
 
 class MenuRepository {
   static async getAll(restaurantId, filters = {}) {
@@ -22,9 +23,9 @@ class MenuRepository {
     }
 
     if (search) {
-      query += ' AND (m.name LIKE ? OR m.sku LIKE ? OR m.barcode LIKE ? OR m.description LIKE ?)';
+      query += ' AND (m.name LIKE ? OR m.sku LIKE ? OR m.barcode LIKE ? OR m.description LIKE ? OR m.item_code LIKE ? OR m.brand LIKE ?)';
       const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     query += ' ORDER BY m.category_id ASC, m.name ASC';
@@ -51,16 +52,35 @@ class MenuRepository {
       category_id, name, sku, barcode, description, price, purchase_price,
       is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category,
       gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url,
-      seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory
+      seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory,
+      goods_or_service, item_code, hsn_code, purchase_unit, sales_unit, brand, item_group, tags,
+      mrp, igst_rate, discount_type, discount_value, is_trackable, opening_stock, cost_price,
+      stock_start_date, at_par_stock, min_stock, linked_sales_account, linked_purchase_account,
+      open_qty_popup, open_price_popup, not_for_sale
     } = item;
+
+    const initialStock = current_stock !== undefined ? current_stock : (opening_stock !== undefined ? opening_stock : 100.00);
 
     const [result] = await pool.execute(
       `INSERT INTO menu_items (
         restaurant_id, category_id, name, sku, barcode, description, price, purchase_price,
         is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category, gst_rate,
         prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url, seq, kitchen_category,
-        printer_id, unit, current_stock, low_stock_threshold, track_inventory
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        printer_id, unit, current_stock, low_stock_threshold, track_inventory,
+        goods_or_service, item_code, hsn_code, purchase_unit, sales_unit, brand, item_group, tags,
+        mrp, igst_rate, discount_type, discount_value, is_trackable, opening_stock, cost_price,
+        stock_start_date, at_par_stock, min_stock, linked_sales_account, linked_purchase_account,
+        open_qty_popup, open_price_popup, not_for_sale
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?
+      )`,
       [
         restaurantId,
         category_id,
@@ -86,9 +106,32 @@ class MenuRepository {
         kitchen_category || 'Main Kitchen',
         printer_id || null,
         base_unit || unit || 'pcs',
-        current_stock !== undefined ? current_stock : 100.00,
+        initialStock,
         low_stock_threshold !== undefined ? low_stock_threshold : 10.00,
-        track_inventory !== undefined ? track_inventory : 1
+        track_inventory !== undefined ? track_inventory : (is_trackable !== undefined ? is_trackable : 1),
+        goods_or_service || 'Goods',
+        item_code || null,
+        hsn_code || null,
+        purchase_unit || 'pcs',
+        sales_unit || 'pcs',
+        brand || null,
+        item_group || null,
+        tags ? (typeof tags === 'string' ? tags : JSON.stringify(tags)) : null,
+        mrp !== undefined ? mrp : 0.00,
+        igst_rate !== undefined ? igst_rate : (gst_rate !== undefined ? gst_rate : 5.00),
+        discount_type || 'percentage',
+        discount_value !== undefined ? discount_value : 0.00,
+        is_trackable !== undefined ? is_trackable : 1,
+        opening_stock !== undefined ? opening_stock : 0.000,
+        cost_price !== undefined ? cost_price : 0.00,
+        stock_start_date || null,
+        at_par_stock !== undefined ? at_par_stock : 0.000,
+        min_stock !== undefined ? min_stock : (low_stock_threshold !== undefined ? low_stock_threshold : 0.000),
+        linked_sales_account || 'Sales',
+        linked_purchase_account || 'Purchase',
+        open_qty_popup ? 1 : 0,
+        open_price_popup ? 1 : 0,
+        not_for_sale ? 1 : 0
       ]
     );
     return result.insertId;
@@ -99,7 +142,11 @@ class MenuRepository {
       category_id, name, sku, barcode, description, price, purchase_price,
       is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category,
       gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url,
-      seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory
+      seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory,
+      goods_or_service, item_code, hsn_code, purchase_unit, sales_unit, brand, item_group, tags,
+      mrp, igst_rate, discount_type, discount_value, is_trackable, opening_stock, cost_price,
+      stock_start_date, at_par_stock, min_stock, linked_sales_account, linked_purchase_account,
+      open_qty_popup, open_price_popup, not_for_sale
     } = item;
 
     const [result] = await pool.execute(
@@ -110,7 +157,30 @@ class MenuRepository {
         is_veg = ?, spicy_level = ?, is_available = ?, image_url = ?, barcode_image_url = COALESCE(?, barcode_image_url), seq = ?,
         kitchen_category = ?, printer_id = ?, unit = COALESCE(?, unit),
         current_stock = COALESCE(?, current_stock), low_stock_threshold = COALESCE(?, low_stock_threshold),
-        track_inventory = COALESCE(?, track_inventory)
+        track_inventory = COALESCE(?, track_inventory),
+        goods_or_service = COALESCE(?, goods_or_service),
+        item_code = COALESCE(?, item_code),
+        hsn_code = COALESCE(?, hsn_code),
+        purchase_unit = COALESCE(?, purchase_unit),
+        sales_unit = COALESCE(?, sales_unit),
+        brand = COALESCE(?, brand),
+        item_group = COALESCE(?, item_group),
+        tags = COALESCE(?, tags),
+        mrp = COALESCE(?, mrp),
+        igst_rate = COALESCE(?, igst_rate),
+        discount_type = COALESCE(?, discount_type),
+        discount_value = COALESCE(?, discount_value),
+        is_trackable = COALESCE(?, is_trackable),
+        opening_stock = COALESCE(?, opening_stock),
+        cost_price = COALESCE(?, cost_price),
+        stock_start_date = COALESCE(?, stock_start_date),
+        at_par_stock = COALESCE(?, at_par_stock),
+        min_stock = COALESCE(?, min_stock),
+        linked_sales_account = COALESCE(?, linked_sales_account),
+        linked_purchase_account = COALESCE(?, linked_purchase_account),
+        open_qty_popup = COALESCE(?, open_qty_popup),
+        open_price_popup = COALESCE(?, open_price_popup),
+        not_for_sale = COALESCE(?, not_for_sale)
       WHERE id = ? AND restaurant_id = ?`,
       [
         category_id,
@@ -139,6 +209,29 @@ class MenuRepository {
         current_stock !== undefined ? current_stock : null,
         low_stock_threshold !== undefined ? low_stock_threshold : null,
         track_inventory !== undefined ? track_inventory : null,
+        goods_or_service !== undefined ? goods_or_service : null,
+        item_code !== undefined ? item_code : null,
+        hsn_code !== undefined ? hsn_code : null,
+        purchase_unit !== undefined ? purchase_unit : null,
+        sales_unit !== undefined ? sales_unit : null,
+        brand !== undefined ? brand : null,
+        item_group !== undefined ? item_group : null,
+        tags !== undefined ? (typeof tags === 'string' ? tags : JSON.stringify(tags)) : null,
+        mrp !== undefined ? mrp : null,
+        igst_rate !== undefined ? igst_rate : null,
+        discount_type !== undefined ? discount_type : null,
+        discount_value !== undefined ? discount_value : null,
+        is_trackable !== undefined ? is_trackable : null,
+        opening_stock !== undefined ? opening_stock : null,
+        cost_price !== undefined ? cost_price : null,
+        stock_start_date !== undefined ? (stock_start_date ? formatLocalDate(stock_start_date) : null) : null,
+        at_par_stock !== undefined ? at_par_stock : null,
+        min_stock !== undefined ? min_stock : null,
+        linked_sales_account !== undefined ? linked_sales_account : null,
+        linked_purchase_account !== undefined ? linked_purchase_account : null,
+        open_qty_popup !== undefined ? (open_qty_popup ? 1 : 0) : null,
+        open_price_popup !== undefined ? (open_price_popup ? 1 : 0) : null,
+        not_for_sale !== undefined ? (not_for_sale ? 1 : 0) : null,
         id,
         restaurantId
       ]

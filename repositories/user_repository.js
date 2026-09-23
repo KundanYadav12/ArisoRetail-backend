@@ -78,6 +78,10 @@ class UserRepository {
     return rows;
   }
 
+  static async getUsersByRestaurant(restaurantId) {
+    return this.getAllByRestaurant(restaurantId);
+  }
+
   static async create(user) {
     const { restaurant_id, name, username, email, password_hash, role, is_active, must_change_password, is_verified, temp_password } = user;
     const activeState = is_active !== undefined ? (is_active ? 1 : 0) : 1;

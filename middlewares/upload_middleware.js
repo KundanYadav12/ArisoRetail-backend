@@ -18,7 +18,8 @@ const MIME_TO_EXT = {
   'image/heif': '.heif',
   'image/jfif': '.jfif',
   'image/bmp': '.bmp',
-  'image/tiff': '.tiff'
+  'image/tiff': '.tiff',
+  'application/pdf': '.pdf'
 };
 
 function getExtension(file) {
@@ -41,12 +42,12 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif', '.heic', '.heif', '.jfif', '.bmp', '.tiff'];
+  const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif', '.heic', '.heif', '.jfif', '.bmp', '.tiff', '.pdf'];
   const ext = getExtension(file);
-  if (allowedExts.includes(ext) || (file.mimetype && file.mimetype.startsWith('image/'))) {
+  if (allowedExts.includes(ext) || (file.mimetype && (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf'))) {
     return cb(null, true);
   }
-  const err = new Error('Only image uploads are allowed! Supported formats: JPG, JPEG, PNG, WEBP, SVG, GIF, HEIC, JFIF, BMP, TIFF.');
+  const err = new Error('Only image and PDF uploads are allowed! Supported formats: JPG, JPEG, PNG, WEBP, SVG, GIF, HEIC, JFIF, BMP, TIFF, PDF.');
   err.status = 400;
   cb(err);
 };

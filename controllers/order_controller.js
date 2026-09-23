@@ -6,10 +6,12 @@ const PrinterService = require('../services/printer_service');
 const { generateExcelWorkbook } = require('../utils/excel_helper');
 const PdfReceiptService = require('../services/pdf_receipt_service');
 const ReceiptRepository = require('../repositories/receipt_repository');
+const EmailService = require('../services/email_service');
+const { getISTDateString } = require('../utils/date_utils');
 
 class OrderController {
   static async create(req, res) {
-    const allowedRoles = ['cashier', 'admin', 'manager', 'owner', 'super_admin', 'superadmin'];
+    const allowedRoles = ['cashier', 'salesman', 'admin', 'manager', 'owner', 'super_admin', 'superadmin'];
     if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
         error: 'FORBIDDEN_ROLE',
@@ -19,8 +21,11 @@ class OrderController {
 
     const { 
       items, payment_mode, payment_details, subtotal, tax_amount, discount_amount, total_amount, 
-      table_number_or_takeaway, notes, status, discount_type, discount_value, customer_name, customer_phone, print_actions,
-      idempotency_key, offline_id, tax_type
+      table_number_or_takeaway, notes, status, discount_type, discount_value, 
+      customer_id, customer_name, customer_phone, customer_address, store_name, salesman_id, salesman_name,
+      print_actions, idempotency_key, offline_id, tax_type,
+      delivery_date, billing_address, shipping_address, place_of_supply, price_list, reference_number,
+      additional_charges, is_sales_order, kitchen_status
     } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -43,6 +48,13 @@ class OrderController {
       }
 
       const safeIdempotencyKey = idempotency_key || offline_id || null;
+      const cashierShiftId = shiftId || 1;
+      const sanitizedItems = items;
+
+      // Determine salesman info if placed by salesman or admin/manager acting as seller
+      const isSalesUser = ['salesman', 'admin', 'manager'].includes(req.user.role);
+      const effectiveSalesmanId = isSalesUser ? (salesman_id || req.user.id) : (salesman_id || null);
+      const effectiveSalesmanName = isSalesUser ? (salesman_name || req.user.name) : (salesman_name || null);
 
       // Consolidate order insert parameters
       const orderData = {
@@ -53,32 +65,38 @@ class OrderController {
         discount_amount: parseFloat(discount_amount || 0),
         total_amount: parseFloat(total_amount),
         payment_mode: payment_mode || 'pending',
-        payment_details,
-        cashier_shift_id: shiftId || 1, // Fallback for managers/admins placing orders
-        table_number_or_takeaway: table_number_or_takeaway || 'Takeaway',
-        notes,
         status: orderStatus,
-        discount_type,
-        discount_value,
-        customer_name,
-        customer_phone,
-        idempotency_key: safeIdempotencyKey,
-        tax_type: tax_type || 'intra'
+        order_status: orderStatus,
+        cashier_shift_id: cashierShiftId,
+        table_number_or_takeaway: table_number_or_takeaway || 'takeaway',
+        notes: notes || null,
+        kitchen_status: kitchen_status || 'pending',
+        discount_type: discount_type || null,
+        discount_value: discount_value ? parseFloat(discount_value) : null,
+        customer_id: customer_id || null,
+        customer_name: customer_name || null,
+        customer_phone: customer_phone || null,
+        customer_address: customer_address || null,
+        store_name: store_name || null,
+        salesman_id: effectiveSalesmanId,
+        salesman_name: effectiveSalesmanName,
+        tax_type: tax_type || 'intra',
+        delivery_date: delivery_date || null,
+        billing_address: billing_address || customer_address || null,
+        shipping_address: shipping_address || null,
+        place_of_supply: place_of_supply || null,
+        price_list: price_list || 'standard',
+        reference_number: reference_number || null,
+        additional_charges: additional_charges || null,
+        is_sales_order: is_sales_order ? 1 : 0
       };
 
-      // Transactional save to DB
-      const result = await OrderRepository.create(restaurantId, orderData, items);
-      const createdOrder = result.order;
+      const createdOrder = await OrderRepository.create(restaurantId, orderData, sanitizedItems, safeIdempotencyKey);
+      const orderId = createdOrder.id || createdOrder.order?.id;
+      const orderNumber = createdOrder.unique_order_number || createdOrder.order?.unique_order_number;
 
       try {
-        await SuperAdminRepository.addAuditLog(restaurantId, cashierId, 'ORDER_PLACE', `Placed order #${createdOrder.unique_order_number} for Rs. ${createdOrder.total_amount} [Status: ${orderStatus}]`, req.ip);
-      } catch (aErr) {
-        console.warn('[Order Audit Log Warning]:', aErr.message);
-      }
-
-      // Enqueue print jobs to database print_queue
-      try {
-        PrinterService.enqueueOrderPrintJobs(restaurantId, createdOrder.id, print_actions);
+        PrinterService.enqueueOrderPrintJobs(restaurantId, orderId, print_actions);
       } catch (pErr) {
         console.error('[Order Placement Print Enqueue Warning]:', pErr.message);
       }
@@ -86,8 +104,9 @@ class OrderController {
       // Return immediately
       return res.status(201).json({
         message: 'Order placed successfully.',
-        orderNumber: createdOrder.unique_order_number,
-        orderId: createdOrder.id
+        orderNumber: orderNumber,
+        orderId: orderId,
+        order: createdOrder.order || createdOrder
       });
     } catch (err) {
       console.error('Order creation error:', err);
@@ -100,9 +119,13 @@ class OrderController {
       const restaurantId = req.user.restaurant_id;
       const filters = {
         cashier_id: req.query.cashier_id,
-        order_status: req.query.order_status,
+        salesman_id: req.query.salesman_id,
+        order_status: req.query.order_status || req.query.status,
+        is_sales_order: req.query.is_sales_order,
         date_from: req.query.date_from,
         date_to: req.query.date_to,
+        search: req.query.search,
+        include_items: req.query.include_items === 'true' || req.query.include_items === true,
         limit: req.query.limit,
         offset: req.query.offset
       };
@@ -136,8 +159,8 @@ class OrderController {
     }
 
     const role = (req.user.role || '').toLowerCase();
-    if (role === 'cashier' && status !== 'completed') {
-      return res.status(403).json({ error: 'FORBIDDEN', message: 'Cashiers are only authorized to mark held orders as completed.' });
+    if ((role === 'cashier' || role === 'salesman') && !['completed', 'cancelled'].includes(status)) {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Staff can only update orders to completed or cancelled.' });
     }
 
     try {
@@ -160,6 +183,157 @@ class OrderController {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to update order status.' });
+    }
+  }
+
+  static async confirmOrder(req, res) {
+    const allowedRoles = ['cashier', 'salesman', 'admin', 'manager', 'owner', 'super_admin', 'superadmin'];
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE', message: 'Unauthorized to confirm orders.' });
+    }
+
+    const { payment_mode, payment_details, print_actions } = req.body;
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const shiftId = req.user.shift_id || null;
+      const result = await OrderRepository.confirmOrder(
+        req.params.id,
+        restaurantId,
+        req.user.id,
+        req.user.name,
+        payment_mode,
+        payment_details,
+        shiftId
+      );
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error || 'Failed to confirm order.' });
+      }
+
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'ORDER_CONFIRM', `Confirmed pending order #${result.orderNumber} (ID: ${req.params.id})`, req.ip);
+
+      // Enqueue print jobs if requested
+      try {
+        PrinterService.enqueueOrderPrintJobs(restaurantId, req.params.id, print_actions);
+      } catch (pErr) {
+        console.warn('[Order Confirm Print Enqueue Warning]:', pErr.message);
+      }
+
+      return res.json({
+        message: 'Order confirmed successfully.',
+        orderId: result.orderId,
+        orderNumber: result.orderNumber
+      });
+    } catch (err) {
+      console.error('[OrderController.confirmOrder error]:', err);
+      return res.status(500).json({ error: err.message || 'Failed to confirm order.' });
+    }
+  }
+
+  /**
+   * Convert Sales Order to Invoice (partial or full)
+   */
+  static async convertToInvoice(req, res) {
+    const allowedRoles = ['cashier', 'salesman', 'admin', 'manager', 'owner', 'super_admin', 'superadmin'];
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE', message: 'Unauthorized to convert orders.' });
+    }
+
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const salesOrderId = req.params.id;
+      const { invoice_data = {}, items = [], print_actions } = req.body;
+      const shiftId = req.user.shift_id || null;
+
+      const result = await OrderRepository.convertToInvoice(
+        salesOrderId,
+        restaurantId,
+        invoice_data,
+        items,
+        req.user.id,
+        req.user.name,
+        shiftId
+      );
+
+      await SuperAdminRepository.addAuditLog(
+        restaurantId,
+        req.user.id,
+        'ORDER_INVOICE_CONVERT',
+        `Converted Sales Order #${salesOrderId} to Invoice #${result.invoiceNumber} (₹${result.grandTotal})`,
+        req.ip
+      ).catch(() => {});
+
+      // Enqueue print jobs if requested
+      if (print_actions) {
+        try {
+          PrinterService.enqueueOrderPrintJobs(restaurantId, result.invoiceId, print_actions);
+        } catch (pErr) {
+          console.warn('[Order Invoice Print Enqueue Warning]:', pErr.message);
+        }
+      }
+
+      return res.status(201).json({
+        message: 'Invoice created successfully.',
+        ...result
+      });
+    } catch (err) {
+      console.error('[OrderController.convertToInvoice error]:', err);
+      return res.status(400).json({ error: err.message || 'Failed to convert order to invoice.' });
+    }
+  }
+
+  /**
+   * Convert Estimate into a Sales Order
+   */
+  static async convertEstimateToSalesOrder(req, res) {
+    const allowedRoles = ['cashier', 'salesman', 'admin', 'manager', 'owner', 'super_admin', 'superadmin'];
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE', message: 'Unauthorized to convert estimates.' });
+    }
+
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const estimateId = req.params.id;
+
+      const result = await OrderRepository.convertEstimateToSalesOrder(
+        estimateId,
+        restaurantId,
+        req.user.id,
+        req.user.name
+      );
+
+      await SuperAdminRepository.addAuditLog(
+        restaurantId,
+        req.user.id,
+        'ESTIMATE_CONVERT',
+        `Converted Estimate #${estimateId} to Sales Order #${result.salesOrderNumber}`,
+        req.ip
+      ).catch(() => {});
+
+      return res.status(201).json({
+        message: 'Estimate converted to Sales Order successfully.',
+        ...result
+      });
+    } catch (err) {
+      console.error('[OrderController.convertEstimateToSalesOrder error]:', err);
+      return res.status(400).json({ error: err.message || 'Failed to convert estimate.' });
+    }
+  }
+
+  /**
+   * Get connected document timeline (Estimate -> SO -> Challans -> Invoices)
+   */
+  static async getOrderTimeline(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const timeline = await OrderRepository.getOrderTimeline(req.params.id, restaurantId);
+      if (!timeline) {
+        return res.status(404).json({ error: 'Order not found.' });
+      }
+      return res.json(timeline);
+    } catch (err) {
+      console.error('[OrderController.getOrderTimeline error]:', err);
+      return res.status(500).json({ error: 'Failed to fetch order timeline.' });
     }
   }
 
@@ -356,7 +530,7 @@ class OrderController {
       });
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename=order_history_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      res.setHeader('Content-Disposition', `attachment; filename=order_history_${getISTDateString()}.xlsx`);
       return res.send(buffer);
     } catch (err) {
       console.error(err);
@@ -395,7 +569,7 @@ class OrderController {
       });
 
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename=order_history_${new Date().toISOString().slice(0, 10)}.csv`);
+      res.setHeader('Content-Disposition', `attachment; filename=order_history_${getISTDateString()}.csv`);
       return res.send(csv);
     } catch (err) {
       console.error(err);
@@ -467,6 +641,169 @@ class OrderController {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to retrieve shift summary.' });
+    }
+  }
+
+  static async update(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const orderId = req.params.id;
+      const { 
+        items, subtotal, tax_amount, discount_amount, total_amount, 
+        customer_id, customer_name, customer_phone, notes, 
+        delivery_date, billing_address, shipping_address, place_of_supply, 
+        price_list, reference_number, additional_charges 
+      } = req.body;
+
+      const orderData = {
+        subtotal,
+        tax_amount,
+        discount_amount,
+        total_amount,
+        customer_id,
+        customer_name,
+        customer_phone,
+        notes,
+        delivery_date,
+        billing_address,
+        shipping_address,
+        place_of_supply,
+        price_list,
+        reference_number,
+        additional_charges
+      };
+
+      const result = await OrderRepository.updateSalesOrder(orderId, restaurantId, orderData, items);
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'ORDER_UPDATE', `Updated sales order (ID: ${orderId})`, req.ip);
+
+      return res.json({ message: 'Sales order updated successfully.', ...result });
+    } catch (err) {
+      console.error('Update sales order error:', err);
+      return res.status(400).json({ error: err.message || 'Failed to update sales order.' });
+    }
+  }
+
+  static async sendVoucherEmail(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const orderId = req.params.id;
+      const { recipient_email } = req.body;
+
+      if (!recipient_email) {
+        return res.status(400).json({ error: 'Recipient email is required.' });
+      }
+
+      const orderDetails = await OrderRepository.getById(orderId, restaurantId);
+      if (!orderDetails || !orderDetails.order) {
+        return res.status(404).json({ error: 'Order not found.' });
+      }
+
+      const { order, items } = orderDetails;
+      const storeName = req.user.restaurant_name || 'Ariso Retail';
+
+      const itemsRowsHtml = (items || []).map((it, idx) => `
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 8px 12px;">${idx + 1}</td>
+          <td style="padding: 8px 12px;">${it.name || it.item_name}</td>
+          <td style="padding: 8px 12px; text-align: center;">${it.item_weight ? `${it.item_weight} ${it.weight_unit || 'KG'}` : `${it.quantity} ${it.weight_unit || 'PCS'}`}</td>
+          <td style="padding: 8px 12px; text-align: right;">₹${parseFloat(it.price || it.unit_price).toFixed(2)}</td>
+          <td style="padding: 8px 12px; text-align: right;">${parseFloat(it.discount_amount || 0) > 0 ? `₹${parseFloat(it.discount_amount).toFixed(2)}` : '-'}</td>
+          <td style="padding: 8px 12px; text-align: right;">${parseFloat(it.gst_rate || 0)}%</td>
+          <td style="padding: 8px 12px; text-align: right; font-weight: bold;">₹${((parseFloat(it.price || it.unit_price) * (it.item_weight ? parseFloat(it.item_weight) : it.quantity)) - parseFloat(it.discount_amount || 0) + parseFloat(it.tax_amount || 0)).toFixed(2)}</td>
+        </tr>
+      `).join('');
+
+      let additionalCharges = [];
+      try {
+        additionalCharges = typeof order.additional_charges === 'string' ? JSON.parse(order.additional_charges) : (order.additional_charges || []);
+      } catch (e) {
+        additionalCharges = [];
+      }
+
+      const chargesHtml = (additionalCharges || []).map(ch => `
+        <tr>
+          <td colspan="6" style="padding: 6px 12px; text-align: right;">${ch.name}:</td>
+          <td style="padding: 6px 12px; text-align: right; font-weight: 500;">₹${parseFloat(ch.amount || 0).toFixed(2)}</td>
+        </tr>
+      `).join('');
+
+      const subject = `Sales Order Voucher - #${order.unique_order_number || order.id} from ${storeName}`;
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 680px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px; color: #1e293b;">
+          <div style="display: flex; justify-content: space-between; border-bottom: 2px solid #3b82f6; padding-bottom: 16px; margin-bottom: 20px;">
+            <div>
+              <h2 style="margin: 0; color: #1e40af;">${storeName}</h2>
+              <p style="margin: 4px 0 0; color: #64748b; font-size: 14px;">SALES ORDER VOUCHER</p>
+            </div>
+            <div style="text-align: right;">
+              <p style="margin: 0; font-size: 16px; font-weight: bold;">Order #: ${order.unique_order_number || order.id}</p>
+              <p style="margin: 4px 0 0; font-size: 13px; color: #64748b;">Date: ${new Date(order.created_at).toLocaleDateString()}</p>
+              ${order.delivery_date ? `<p style="margin: 4px 0 0; font-size: 13px; color: #2563eb; font-weight: 600;">Delivery Date: ${new Date(order.delivery_date).toLocaleDateString()}</p>` : ''}
+            </div>
+          </div>
+
+          <div style="background-color: #f8fafc; padding: 14px; border-radius: 6px; margin-bottom: 20px; font-size: 14px;">
+            <p style="margin: 0 0 6px;"><b>Party / Customer:</b> ${order.customer_name || 'Walk-in Party'}</p>
+            ${order.customer_phone ? `<p style="margin: 0 0 6px;"><b>Phone:</b> ${order.customer_phone}</p>` : ''}
+            ${order.billing_address ? `<p style="margin: 0 0 6px;"><b>Billing Address:</b> ${order.billing_address}</p>` : ''}
+            ${order.shipping_address ? `<p style="margin: 0 0 6px;"><b>Shipping Address:</b> ${order.shipping_address}</p>` : ''}
+            ${order.reference_number ? `<p style="margin: 0 0 6px;"><b>Reference #:</b> ${order.reference_number}</p>` : ''}
+          </div>
+
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
+            <thead>
+              <tr style="background-color: #f1f5f9; text-align: left;">
+                <th style="padding: 8px 12px;">#</th>
+                <th style="padding: 8px 12px;">Item</th>
+                <th style="padding: 8px 12px; text-align: center;">Qty/Unit</th>
+                <th style="padding: 8px 12px; text-align: right;">Price</th>
+                <th style="padding: 8px 12px; text-align: right;">Disc</th>
+                <th style="padding: 8px 12px; text-align: right;">Tax</th>
+                <th style="padding: 8px 12px; text-align: right;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsRowsHtml}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="6" style="padding: 8px 12px; text-align: right; font-weight: 500;">Subtotal:</td>
+                <td style="padding: 8px 12px; text-align: right;">₹${parseFloat(order.subtotal || 0).toFixed(2)}</td>
+              </tr>
+              ${parseFloat(order.discount_amount || 0) > 0 ? `
+              <tr>
+                <td colspan="6" style="padding: 6px 12px; text-align: right; color: #16a34a;">Discount:</td>
+                <td style="padding: 6px 12px; text-align: right; color: #16a34a;">-₹${parseFloat(order.discount_amount || 0).toFixed(2)}</td>
+              </tr>` : ''}
+              <tr>
+                <td colspan="6" style="padding: 6px 12px; text-align: right;">Tax:</td>
+                <td style="padding: 6px 12px; text-align: right;">₹${parseFloat(order.tax_amount || 0).toFixed(2)}</td>
+              </tr>
+              ${chargesHtml}
+              <tr style="border-top: 2px solid #0f172a; font-size: 16px;">
+                <td colspan="6" style="padding: 10px 12px; text-align: right; font-weight: bold;">Grand Total:</td>
+                <td style="padding: 10px 12px; text-align: right; font-weight: bold; color: #2563eb;">₹${parseFloat(order.total_amount || 0).toFixed(2)}</td>
+              </tr>
+            </tfoot>
+          </table>
+
+          <div style="border-top: 1px solid #e2e8f0; padding-top: 14px; font-size: 12px; color: #64748b; text-align: center;">
+            <p style="margin: 0;">Thank you for your business! This is a system-generated Sales Order voucher.</p>
+          </div>
+        </div>
+      `;
+
+      const emailResult = await EmailService.sendMail({
+        to: recipient_email,
+        subject,
+        html,
+        restaurantId
+      });
+
+      return res.json({ message: 'Sales order voucher sent successfully via email.', ...emailResult });
+    } catch (err) {
+      console.error('Send sales order email error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to send sales order email.' });
     }
   }
 }

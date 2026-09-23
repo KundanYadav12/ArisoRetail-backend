@@ -1,6 +1,7 @@
 const express = require('express');
 const { authenticateToken } = require('../middlewares/auth_middleware');
 const pool = require('../config/db');
+const { getISTDateString } = require('../utils/date_utils');
 
 const router = express.Router();
 
@@ -166,7 +167,7 @@ router.get('/shift-summary', authenticateToken, async (req, res) => {
     const shiftId = shift ? shift.id : null;
 
     // 2. Sum Cash In & Cash Out entries for current user today
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getISTDateString();
     const datePattern = `${today}%`;
 
     const [movementsRow] = await pool.execute(
@@ -198,11 +199,19 @@ router.get('/shift-summary', authenticateToken, async (req, res) => {
     const totalSales = parseFloat(salesRow[0]?.totalSales || 0);
     const totalOrders = parseInt(salesRow[0]?.totalOrders || 0, 10);
 
-    // Drawer Cash = Starting Cash + Cash In - Cash Out + Cash Sales
-    const drawerCash = startingCash + totalCashIn - totalCashOut + cashSales;
+    // 4. Sum cash expenses recorded today (status != 'CANCELLED')
+    const [expenseRow] = await pool.execute(
+      'SELECT COALESCE(SUM(total_amount), 0) as cashExpenses ' +
+      'FROM expenses WHERE restaurant_id = ? AND LOWER(payment_mode) = "cash" AND status != "CANCELLED" AND expense_date LIKE ?',
+      [restaurantId, datePattern]
+    );
+    const cashExpenses = parseFloat(expenseRow[0]?.cashExpenses || 0);
+
+    // Drawer Cash = Starting Cash + Cash In - Cash Out + Cash Sales - Cash Expenses
+    const drawerCash = startingCash + totalCashIn - totalCashOut + cashSales - cashExpenses;
 
     return res.json({
-      status: shift ? 'OPEN' : 'OPEN (UNSET)',
+      shift,
       shift_id: shiftId,
       starting_cash: startingCash,
       total_cash_in: totalCashIn,
@@ -212,11 +221,119 @@ router.get('/shift-summary', authenticateToken, async (req, res) => {
       card_sales: cardSales,
       total_sales: totalSales,
       total_orders: totalOrders,
+      cash_expenses: cashExpenses,
       drawer_cash: drawerCash
     });
   } catch (err) {
     console.error('[cashier/shift-summary error]', err);
-    return res.status(500).json({ error: 'Failed to fetch shift summary.' });
+    return res.status(500).json({ error: err.message || 'Failed to fetch shift summary.' });
+  }
+});
+
+/**
+ * POST /api/cashier/close-shift
+ * Close active cashier shift with physical cash count, variance, and handover notes.
+ */
+router.post('/close-shift', authenticateToken, async (req, res) => {
+  const userId = req.user?.id;
+  const restaurantId = req.user?.restaurant_id;
+  const { shift_id, cash_counted, variance_reason, handover_notes, cash_count } = req.body;
+
+  if (!userId || !restaurantId) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+
+  try {
+    // 1. Fetch shift to close
+    let targetShiftId = shift_id;
+    if (!targetShiftId) {
+      const [shifts] = await pool.execute(
+        'SELECT id FROM cashier_shifts WHERE restaurant_id = ? AND cashier_id = ? AND status = "open" ORDER BY id DESC LIMIT 1',
+        [restaurantId, userId]
+      );
+      if (shifts.length === 0) {
+        return res.status(400).json({ error: 'No active open shift found to close.' });
+      }
+      targetShiftId = shifts[0].id;
+    }
+
+    const countedVal = parseFloat(cash_counted || 0);
+
+    // 2. Fetch shift data to compute expected drawer cash
+    const today = getISTDateString();
+    const datePattern = `${today}%`;
+
+    const [shiftRows] = await pool.execute(
+      'SELECT starting_cash FROM cashier_shifts WHERE id = ? AND restaurant_id = ?',
+      [targetShiftId, restaurantId]
+    );
+    const startingCash = parseFloat(shiftRows[0]?.starting_cash || 0);
+
+    const [movementsRow] = await pool.execute(
+      'SELECT ' +
+      'COALESCE(SUM(CASE WHEN movement_type = "in" THEN amount ELSE 0 END), 0) as totalCashIn, ' +
+      'COALESCE(SUM(CASE WHEN movement_type = "out" THEN amount ELSE 0 END), 0) as totalCashOut ' +
+      'FROM cash_movements WHERE restaurant_id = ? AND user_id = ? AND created_at LIKE ?',
+      [restaurantId, userId, datePattern]
+    );
+    const totalCashIn = parseFloat(movementsRow[0]?.totalCashIn || 0);
+    const totalCashOut = parseFloat(movementsRow[0]?.totalCashOut || 0);
+
+    const [salesRow] = await pool.execute(
+      'SELECT COALESCE(SUM(CASE WHEN LOWER(payment_mode) = "cash" THEN total_amount ELSE 0 END), 0) as cashSales ' +
+      'FROM orders WHERE restaurant_id = ? AND (cashier_id = ? OR cashier_id IS NULL) AND created_at LIKE ? AND (order_status != "cancelled" OR order_status IS NULL)',
+      [restaurantId, userId, datePattern]
+    );
+    const cashSales = parseFloat(salesRow[0]?.cashSales || 0);
+
+    const [expenseRow] = await pool.execute(
+      'SELECT COALESCE(SUM(total_amount), 0) as cashExpenses ' +
+      'FROM expenses WHERE restaurant_id = ? AND LOWER(payment_mode) = "cash" AND status != "CANCELLED" AND expense_date LIKE ?',
+      [restaurantId, datePattern]
+    );
+    const cashExpenses = parseFloat(expenseRow[0]?.cashExpenses || 0);
+
+    const expectedCash = startingCash + totalCashIn - totalCashOut + cashSales - cashExpenses;
+    const variance = parseFloat((countedVal - expectedCash).toFixed(2));
+
+    // 3. Update cashier shift
+    await pool.execute(
+      'UPDATE cashier_shifts SET ' +
+      'status = "closed", logout_time = NOW(), ' +
+      'cash_counted = ?, cash_variance = ?, variance_reason = ?, handover_notes = ?, closed_by_user_id = ? ' +
+      'WHERE id = ? AND restaurant_id = ?',
+      [countedVal, variance, variance_reason || null, handover_notes || null, userId, targetShiftId, restaurantId]
+    );
+
+    // 4. Record cash count if provided
+    if (cash_count && typeof cash_count === 'object') {
+      try {
+        const DayEndRepository = require('../repositories/day_end_repository');
+        await DayEndRepository.recordCashCount(restaurantId, {
+          shift_id: targetShiftId,
+          user_id: userId,
+          user_name: req.user?.name || req.user?.username || 'Cashier',
+          count_type: 'SHIFT_CLOSE',
+          ...cash_count,
+          total_physical_cash: countedVal,
+          notes: handover_notes || null
+        });
+      } catch (ccErr) {
+        console.warn('[close-shift cash count warning]', ccErr.message);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Cashier shift closed successfully.',
+      shift_id: targetShiftId,
+      expected_cash: expectedCash,
+      cash_counted: countedVal,
+      cash_variance: variance
+    });
+  } catch (err) {
+    console.error('[cashier/close-shift error]', err);
+    return res.status(500).json({ error: err.message || 'Failed to close shift.' });
   }
 });
 

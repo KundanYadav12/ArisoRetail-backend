@@ -6,7 +6,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // Staff members can place active ticket orders
-router.post('/', authorizeRoles('cashier', 'admin', 'manager', 'owner', 'super_admin', 'superadmin'), OrderController.create);
+router.post('/', authorizeRoles('cashier', 'salesman', 'admin', 'manager', 'owner', 'super_admin', 'superadmin'), OrderController.create);
 router.get('/', OrderController.getAll);
 router.get('/history/list', OrderController.getHistory);
 router.get('/history/export-excel', OrderController.exportHistoryExcel);
@@ -18,7 +18,25 @@ router.get('/:id/pdf', OrderController.getReceiptPdf);
 router.post('/:id/reprint', OrderController.reprint);
 router.put('/:id/kitchen-status', OrderController.updateKitchenStatus);
 
-// Cashiers can update status to complete held orders; managers/admins can update any status (refunds, cancellations)
-router.put('/:id/status', authorizeRoles('admin', 'manager', 'cashier'), OrderController.updateStatus);
+// Confirm pending sales order (deducts stock and completes order)
+router.post('/:id/confirm', authorizeRoles('admin', 'manager', 'cashier', 'salesman'), OrderController.confirmOrder);
+
+// Convert Sales Order to Invoice (partial or full)
+router.post('/:id/convert-to-invoice', authorizeRoles('admin', 'manager', 'cashier', 'salesman'), OrderController.convertToInvoice);
+
+// Convert Estimate to Sales Order
+router.post('/:id/convert-estimate', authorizeRoles('admin', 'manager', 'cashier', 'salesman'), OrderController.convertEstimateToSalesOrder);
+
+// Get order timeline (Estimate -> SO -> Challans -> Invoices)
+router.get('/:id/timeline', OrderController.getOrderTimeline);
+
+// Edit pending sales order
+router.put('/:id', authorizeRoles('admin', 'manager', 'cashier', 'salesman'), OrderController.update);
+
+// Send sales order voucher via email
+router.post('/:id/send-email', authorizeRoles('admin', 'manager', 'cashier', 'salesman'), OrderController.sendVoucherEmail);
+
+// Cashiers & Salesmen can complete or cancel orders; managers/admins can update any status
+router.put('/:id/status', authorizeRoles('admin', 'manager', 'cashier', 'salesman'), OrderController.updateStatus);
 
 module.exports = router;
