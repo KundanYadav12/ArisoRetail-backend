@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const CustomerRepository = require('./customer_repository');
 const CustomerLedgerRepository = require('./customer_ledger_repository');
+const CustomerReceivableRepository = require('./customer_receivable_repository');
 const StockMovementService = require('../services/stock_movement_service');
 const { GstService } = require('../services/gst_service');
 const FinancialAccountService = require('../services/financial_account_service');
@@ -258,14 +259,99 @@ class OrderRepository {
           orderWarehouseId = defWh.length > 0 ? defWh[0].id : null;
         }
 
-        // 3. Insert Order (including complete GST breakdown)
+        // Credit / Udhar & Payment Split calculations
+        const splits = FinancialAccountService.normalizePaymentSplits(payment_mode, payment_details, safeTotalAmount);
+        let immediatePaid = 0;
+        let creditSplitAmount = 0;
+        for (const sp of splits) {
+          const m = (sp.mode || '').toLowerCase();
+          if (m === 'credit' || m === 'due' || m === 'udhar') {
+            creditSplitAmount += sp.amount;
+          } else {
+            immediatePaid += sp.amount;
+          }
+        }
+
+        const isCreditOrDue = (payment_mode === 'credit' || payment_mode === 'due' || payment_mode === 'udhar' || creditSplitAmount > 0);
+
+        let safePaidAmount = safeTotalAmount;
+        if (orderData.paid_amount !== undefined && orderData.paid_amount !== null) {
+          safePaidAmount = Math.max(0, Math.min(safeTotalAmount, parseFloat(orderData.paid_amount) || 0));
+        } else if (isCreditOrDue) {
+          safePaidAmount = Math.max(0, Math.min(safeTotalAmount, immediatePaid));
+        }
+
+        const safeAdvanceAmount = parseFloat(orderData.advance_amount || 0);
+
+        // Validation for Credit / Udhar: customer is required!
+        if ((isCreditOrDue || safePaidAmount < safeTotalAmount) && isEstimateFlag !== 1) {
+          if (!resolvedCustomerId) {
+            throw new Error('Please select a customer for Credit/Udhar sale.');
+          }
+
+          // Check if customer allows credit and check credit limit
+          const [cCheckRows] = await connection.execute(
+            'SELECT id, name, allow_credit, credit_limit, current_balance, credit_days FROM customers WHERE id = ? AND restaurant_id = ? FOR UPDATE',
+            [resolvedCustomerId, restaurantId]
+          );
+          if (cCheckRows.length > 0) {
+            const cInfo = cCheckRows[0];
+            if (cInfo.allow_credit === 0) {
+              throw new Error(`Customer "${cInfo.name}" is not permitted for credit sales.`);
+            }
+
+            const uncollectedDue = Math.max(0, safeTotalAmount - safePaidAmount);
+            const currentBal = parseFloat(cInfo.current_balance || 0);
+            const credLimit = parseFloat(cInfo.credit_limit || 0);
+
+            if (credLimit > 0 && (currentBal + uncollectedDue) > credLimit && !orderData.allow_credit_override) {
+              const availableCredit = Math.max(0, credLimit - currentBal);
+              throw new Error(`Credit limit exceeded! Customer Credit Limit: ₹${credLimit.toFixed(2)}, Current Outstanding: ₹${currentBal.toFixed(2)}, Available Credit: ₹${availableCredit.toFixed(2)}, Required: ₹${uncollectedDue.toFixed(2)}.`);
+            }
+          }
+        }
+
+        let calculatedPaymentStatus = 'completed';
+        if (isEstimateFlag === 1 || isSalesOrderFlag === 1) {
+          calculatedPaymentStatus = orderStatus || 'pending';
+        } else {
+          if (safePaidAmount >= safeTotalAmount && safeTotalAmount > 0) {
+            calculatedPaymentStatus = 'paid';
+          } else if (safePaidAmount > 0 && safePaidAmount < safeTotalAmount) {
+            calculatedPaymentStatus = 'partially_paid';
+          } else if (safeTotalAmount > 0) {
+            calculatedPaymentStatus = 'unpaid';
+          } else {
+            calculatedPaymentStatus = 'paid';
+          }
+        }
+
+        let orderDueDate = orderData.due_date ? String(orderData.due_date).slice(0, 10) : null;
+        if (!orderDueDate && resolvedCustomerId && (isCreditOrDue || safePaidAmount < safeTotalAmount)) {
+          try {
+            const [cDaysRow] = await connection.execute(
+              'SELECT credit_days FROM customers WHERE id = ?',
+              [resolvedCustomerId]
+            );
+            if (cDaysRow.length > 0) {
+              const cDays = parseInt(cDaysRow[0].credit_days || 0);
+              if (cDays > 0) {
+                const d = new Date();
+                d.setDate(d.getDate() + cDays);
+                orderDueDate = d.toISOString().slice(0, 10);
+              }
+            }
+          } catch (err) {}
+        }
+
+        // 3. Insert Order (including complete GST breakdown, payment status, and receivables fields)
         const [orderResult] = await connection.execute(
-          'INSERT INTO orders (order_number, unique_order_number, idempotency_key, restaurant_id, cashier_id, cashier_name, subtotal, tax_amount, discount_amount, total_amount, payment_mode, payment_details, order_status, cashier_shift_id, table_number_or_takeaway, notes, kitchen_status, discount_type, discount_value, customer_name, customer_phone, customer_id, salesman_id, salesman_name, tax_type, delivery_date, billing_address, shipping_address, place_of_supply, price_list, reference_number, additional_charges, is_sales_order, warehouse_id, parent_order_id, is_estimate, invoiced_amount, cgst_amount, sgst_amount, igst_amount, round_off, tax_invoice_type) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO orders (order_number, unique_order_number, idempotency_key, restaurant_id, cashier_id, cashier_name, subtotal, tax_amount, discount_amount, total_amount, paid_amount, due_date, advance_amount, payment_mode, payment_details, order_status, payment_status, cashier_shift_id, table_number_or_takeaway, notes, kitchen_status, discount_type, discount_value, customer_name, customer_phone, customer_id, salesman_id, salesman_name, tax_type, delivery_date, billing_address, shipping_address, place_of_supply, price_list, reference_number, additional_charges, is_sales_order, warehouse_id, parent_order_id, is_estimate, invoiced_amount, cgst_amount, sgst_amount, igst_amount, round_off, tax_invoice_type) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
             uniqueOrderNumber, uniqueOrderNumber, idempotency_key || null, restaurantId, cashier_id || null, cashier_name || null, safeSubtotal, safeTaxAmount,
-            safeDiscountAmount, safeTotalAmount, payment_mode || 'pending', payment_details ? JSON.stringify(payment_details) : null,
-            orderStatus || 'pending', safeCashierShiftId || null, table_number_or_takeaway || 'Takeaway', notes || null,
+            safeDiscountAmount, safeTotalAmount, safePaidAmount, orderDueDate, safeAdvanceAmount, payment_mode || 'pending', payment_details ? JSON.stringify(payment_details) : null,
+            orderStatus || 'pending', calculatedPaymentStatus, safeCashierShiftId || null, table_number_or_takeaway || 'Takeaway', notes || null,
             discount_type || 'amount', parseFloat(discount_value || 0), resolvedCustomerName || null, resolvedCustomerPhone || null,
             resolvedCustomerId || null, salesman_id || null, salesman_name || null, effectiveTaxType,
             delivery_date || null, billing_address || customer_address || null, shipping_address || null,
@@ -381,13 +467,22 @@ class OrderRepository {
         }
 
         // 5. Cashier Shift update (Invoices / completed retail sales only - NOT Estimates or Sales Orders)
+        // CRITICAL: Credit / Udhar amounts are NEVER added to cashier shift physical collections!
         if (safeCashierShiftId && orderStatus === 'completed' && isEstimateFlag !== 1 && isSalesOrderFlag !== 1) {
           try {
-            const cashAdd = payment_mode === 'cash' ? safeTotalAmount : 0;
-            const upiAdd = ['upi', 'gpay', 'phonepe', 'paytm'].includes(payment_mode) ? safeTotalAmount : 0;
-            const cardAdd = ['card', 'credit', 'debit'].includes(payment_mode) ? safeTotalAmount : 0;
-            const walletAdd = payment_mode === 'wallet' ? safeTotalAmount : 0;
-            const otherAdd = (!['cash', 'upi', 'gpay', 'phonepe', 'paytm', 'card', 'credit', 'debit', 'wallet'].includes(payment_mode)) ? safeTotalAmount : 0;
+            let cashAdd = 0, upiAdd = 0, cardAdd = 0, walletAdd = 0, otherAdd = 0;
+            for (const sp of splits) {
+              const m = (sp.mode || '').toLowerCase();
+              if (m === 'credit' || m === 'due' || m === 'udhar') {
+                continue; // Unpaid receivable, not collected into shift cash drawer
+              }
+              if (m === 'cash') cashAdd += sp.amount;
+              else if (['upi', 'gpay', 'phonepe', 'paytm'].includes(m)) upiAdd += sp.amount;
+              else if (['card', 'debit'].includes(m)) cardAdd += sp.amount;
+              else if (m === 'wallet') walletAdd += sp.amount;
+              else otherAdd += sp.amount;
+            }
+            const totalCollectedShift = cashAdd + upiAdd + cardAdd + walletAdd + otherAdd;
 
             await connection.execute(
               'UPDATE cashier_shifts SET ' +
@@ -399,7 +494,7 @@ class OrderRepository {
               'other_collected = other_collected + ?, ' +
               'total_collected = total_collected + ? ' +
               'WHERE id = ? AND restaurant_id = ?',
-              [cashAdd, upiAdd, cardAdd, walletAdd, otherAdd, safeTotalAmount, safeCashierShiftId, restaurantId]
+              [cashAdd, upiAdd, cardAdd, walletAdd, otherAdd, totalCollectedShift, safeCashierShiftId, restaurantId]
             );
           } catch (shiftErr) {
             console.warn('[Cashier Shift Update Warning]:', shiftErr.message);
@@ -409,8 +504,11 @@ class OrderRepository {
         // 6. Bank & Financial Accounts Integration (Completed Tax Invoices only - NOT Estimates or Sales Orders)
         if (orderStatus === 'completed' && isEstimateFlag !== 1 && isSalesOrderFlag !== 1) {
           try {
-            // Customer credit handling if credit/due
-            if (resolvedCustomerId && (payment_mode === 'credit' || payment_mode === 'due')) {
+            const outstandingAmount = Math.max(0, safeTotalAmount - safePaidAmount);
+
+            // Customer credit handling if credit/due OR partial payment with outstanding
+            if (resolvedCustomerId && (isCreditOrDue || outstandingAmount > 0)) {
+              // 1. Record Invoice in customer ledger (Debit total amount)
               await CustomerLedgerRepository.recordEntry(restaurantId, {
                 customerId: resolvedCustomerId,
                 type: 'INVOICE',
@@ -423,9 +521,55 @@ class OrderRepository {
                 userName: cashier_name || 'POS Cashier',
                 notes: `Invoice #${uniqueOrderNumber} on credit`
               }, connection);
+
+              // 2. If immediate partial payment was collected at POS checkout, record it against customer
+              if (safePaidAmount > 0) {
+                const primaryPaidMode = splits.find(s => s.mode !== 'credit' && s.mode !== 'due' && s.mode !== 'udhar')?.mode || 'cash';
+
+                await CustomerLedgerRepository.recordEntry(restaurantId, {
+                  customerId: resolvedCustomerId,
+                  type: 'PAYMENT',
+                  amount: safePaidAmount,
+                  referenceType: 'order',
+                  referenceId: orderId,
+                  referenceNumber: uniqueOrderNumber,
+                  paymentMode: primaryPaidMode,
+                  userId: cashier_id,
+                  userName: cashier_name || 'POS Cashier',
+                  notes: `POS Immediate Payment for Invoice #${uniqueOrderNumber}`
+                }, connection);
+
+                // Record in customer_payments & allocations for audit & receipt traceability
+                try {
+                  const recNum = await CustomerReceivableRepository.getNextReceiptNumber(connection, restaurantId);
+                  const [pmtRes] = await connection.execute(
+                    `INSERT INTO customer_payments (
+                      restaurant_id, payment_number, customer_id, order_id, payment_date,
+                      amount, allocated_amount, advance_amount, payment_mode,
+                      reference_number, notes, created_by_user_id, created_by_name
+                    ) VALUES (?, ?, ?, ?, CURDATE(), ?, ?, 0, ?, ?, ?, ?, ?)`,
+                    [
+                      restaurantId, recNum, resolvedCustomerId, orderId,
+                      safePaidAmount, safePaidAmount, primaryPaidMode,
+                      uniqueOrderNumber, `POS Checkout Payment for Invoice #${uniqueOrderNumber}`,
+                      (!isNaN(parseInt(cashier_id)) ? parseInt(cashier_id) : null),
+                      cashier_name || 'POS Cashier'
+                    ]
+                  );
+                  const paymentId = pmtRes.insertId;
+
+                  await connection.execute(
+                    `INSERT INTO customer_payment_allocations (restaurant_id, payment_id, order_id, allocated_amount)
+                     VALUES (?, ?, ?, ?)`,
+                    [restaurantId, paymentId, orderId, safePaidAmount]
+                  );
+                } catch (pmtErr) {
+                  console.warn('[Customer Payment Record Notice]:', pmtErr.message);
+                }
+              }
             }
 
-            // Route cash / digital payments into mapped financial accounts
+            // Route cash / digital payments into mapped financial accounts (FinancialAccountService already skips credit/due)
             await FinancialAccountService.recordSaleTransaction(connection, {
               restaurantId,
               orderId,
@@ -1378,21 +1522,57 @@ class OrderRepository {
       const safeCashierId = !isNaN(parseInt(userId)) ? parseInt(userId) : (!isNaN(parseInt(salesOrder.cashier_id)) ? parseInt(salesOrder.cashier_id) : null);
       const safeCashierName = userName || (typeof userId === 'string' && isNaN(parseInt(userId)) ? userId : (salesOrder.cashier_name || 'Staff'));
 
-      // 5. Insert child Invoice into `orders` (including GST breakdown and delivery_challan_id)
+      const isCreditOrDueSO = (activePaymentMode === 'credit' || activePaymentMode === 'due' || activePaymentMode === 'udhar');
+      const soAdvance = parseFloat(salesOrder.advance_amount || 0);
+      const advanceApplied = Math.min(grandTotal, soAdvance);
+      
+      let invPaidAmount = grandTotal;
+      if (invoiceData.paid_amount !== undefined && invoiceData.paid_amount !== null) {
+        invPaidAmount = Math.max(0, Math.min(grandTotal, parseFloat(invoiceData.paid_amount) || 0));
+      } else if (isCreditOrDueSO) {
+        invPaidAmount = advanceApplied; // only advance is considered paid
+      }
+
+      let invPaymentStatus = 'completed';
+      if (invPaidAmount >= grandTotal && grandTotal > 0) {
+        invPaymentStatus = 'paid';
+      } else if (invPaidAmount > 0) {
+        invPaymentStatus = 'partially_paid';
+      } else if (grandTotal > 0) {
+        invPaymentStatus = 'unpaid';
+      } else {
+        invPaymentStatus = 'paid';
+      }
+
+      let invDueDate = invoiceData.due_date ? String(invoiceData.due_date).slice(0, 10) : null;
+      if (!invDueDate && salesOrder.customer_id && invPaidAmount < grandTotal) {
+        try {
+          const [cRow] = await connection.execute('SELECT credit_days FROM customers WHERE id = ?', [salesOrder.customer_id]);
+          if (cRow.length > 0 && cRow[0].credit_days > 0) {
+            const d = new Date();
+            d.setDate(d.getDate() + parseInt(cRow[0].credit_days));
+            invDueDate = d.toISOString().slice(0, 10);
+          }
+        } catch (e) {}
+      }
+
+      // 5. Insert child Invoice into `orders` (including GST breakdown, delivery_challan_id, and receivables)
       const [invResult] = await connection.execute(
         `INSERT INTO orders (
           order_number, unique_order_number, restaurant_id, cashier_id, cashier_name,
-          subtotal, tax_amount, discount_amount, total_amount, payment_mode, payment_details,
+          subtotal, tax_amount, discount_amount, total_amount, paid_amount, due_date, advance_amount, payment_status,
+          payment_mode, payment_details,
           order_status, status, cashier_shift_id, table_number_or_takeaway, notes,
           discount_type, discount_value, customer_name, customer_phone, customer_id,
           salesman_id, salesman_name, tax_type, delivery_date, billing_address, shipping_address,
           place_of_supply, price_list, reference_number, additional_charges,
           is_sales_order, warehouse_id, parent_order_id, delivery_challan_id, is_estimate, invoiced_amount,
           cgst_amount, sgst_amount, igst_amount, round_off, tax_invoice_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'completed', ?, ?, ?, 'amount', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'TAX_INVOICE')`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'completed', ?, ?, ?, 'amount', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'TAX_INVOICE')`,
         [
           uniqueInvoiceNumber, uniqueInvoiceNumber, restaurantId, safeCashierId, safeCashierName,
-          subtotal, totalTax, totalDiscount, grandTotal, activePaymentMode, invoiceData.payment_details ? JSON.stringify(invoiceData.payment_details) : null,
+          subtotal, totalTax, totalDiscount, grandTotal, invPaidAmount, invDueDate, advanceApplied, invPaymentStatus,
+          activePaymentMode, invoiceData.payment_details ? JSON.stringify(invoiceData.payment_details) : null,
           safeShiftId, salesOrder.table_number_or_takeaway || 'Takeaway', invoiceData.notes || `Invoice for Sales Order #${salesOrder.unique_order_number}`,
           totalDiscount, salesOrder.customer_name, salesOrder.customer_phone, salesOrder.customer_id,
           salesOrder.salesman_id, salesOrder.salesman_name, salesOrder.tax_type || 'intra',
@@ -1546,14 +1726,16 @@ class OrderRepository {
         }
       }
 
-      // 9. Update cashier shift if active
+      // 9. Update cashier shift if active (CRITICAL: exclude credit / udhar from drawer collections)
       if (safeShiftId) {
         try {
-          const cashAdd = activePaymentMode === 'cash' ? grandTotal : 0;
-          const upiAdd = ['upi', 'gpay', 'phonepe', 'paytm'].includes(activePaymentMode) ? grandTotal : 0;
-          const cardAdd = ['card', 'credit', 'debit'].includes(activePaymentMode) ? grandTotal : 0;
-          const walletAdd = activePaymentMode === 'wallet' ? grandTotal : 0;
-          const otherAdd = (!['cash', 'upi', 'gpay', 'phonepe', 'paytm', 'card', 'credit', 'debit', 'wallet'].includes(activePaymentMode)) ? grandTotal : 0;
+          const immediateNonCredit = isCreditOrDueSO ? 0 : Math.max(0, grandTotal - advanceApplied);
+          const cashAdd = (activePaymentMode === 'cash' && !isCreditOrDueSO) ? immediateNonCredit : 0;
+          const upiAdd = (['upi', 'gpay', 'phonepe', 'paytm'].includes(activePaymentMode) && !isCreditOrDueSO) ? immediateNonCredit : 0;
+          const cardAdd = (['card', 'debit'].includes(activePaymentMode) && !isCreditOrDueSO) ? immediateNonCredit : 0;
+          const walletAdd = (activePaymentMode === 'wallet' && !isCreditOrDueSO) ? immediateNonCredit : 0;
+          const otherAdd = (!['cash', 'upi', 'gpay', 'phonepe', 'paytm', 'card', 'debit', 'wallet', 'credit', 'due', 'udhar'].includes(activePaymentMode)) ? immediateNonCredit : 0;
+          const totalCollectedShift = cashAdd + upiAdd + cardAdd + walletAdd + otherAdd;
 
           await connection.execute(
             'UPDATE cashier_shifts SET ' +
@@ -1565,28 +1747,67 @@ class OrderRepository {
             'other_collected = other_collected + ?, ' +
             'total_collected = total_collected + ? ' +
             'WHERE id = ? AND restaurant_id = ?',
-            [cashAdd, upiAdd, cardAdd, walletAdd, otherAdd, grandTotal, safeShiftId, restaurantId]
+            [cashAdd, upiAdd, cardAdd, walletAdd, otherAdd, totalCollectedShift, safeShiftId, restaurantId]
           );
         } catch (shiftErr) {
           console.warn('[Shift Update Notice]:', shiftErr.message);
         }
       }
 
-      // 10. Financial Accounts Integration
-      if (activePaymentMode !== 'credit' && activePaymentMode !== 'due') {
+      // 10. Financial Accounts & Customer Ledger Integration
+      if (salesOrder.customer_id && (isCreditOrDueSO || invPaidAmount < grandTotal)) {
         try {
-          await FinancialAccountService.recordSaleTransaction(connection, {
-            restaurantId,
-            orderId: invoiceId,
-            orderNumber: uniqueInvoiceNumber,
-            paymentMode: activePaymentMode,
-            paymentDetails: null,
-            totalAmount: grandTotal,
-            customerName: salesOrder.customer_name,
+          // Record Invoice in customer ledger (Debit grandTotal)
+          await CustomerLedgerRepository.recordEntry(restaurantId, {
             customerId: salesOrder.customer_id,
+            type: 'INVOICE',
+            amount: grandTotal,
+            referenceType: 'order',
+            referenceId: invoiceId,
+            referenceNumber: uniqueInvoiceNumber,
+            paymentMode: activePaymentMode,
             userId: safeCashierId,
-            userName: safeCashierName || 'Staff'
-          });
+            userName: safeCashierName || 'Staff',
+            notes: `Invoice #${uniqueInvoiceNumber} for Sales Order #${salesOrder.unique_order_number}`
+          }, connection);
+
+          // If advance was adjusted or partial amount paid, record PAYMENT entry in ledger
+          if (invPaidAmount > 0) {
+            await CustomerLedgerRepository.recordEntry(restaurantId, {
+              customerId: salesOrder.customer_id,
+              type: 'PAYMENT',
+              amount: invPaidAmount,
+              referenceType: 'order',
+              referenceId: invoiceId,
+              referenceNumber: uniqueInvoiceNumber,
+              paymentMode: 'advance_adjustment',
+              userId: safeCashierId,
+              userName: safeCashierName || 'Staff',
+              notes: `Advance/Payment applied to Invoice #${uniqueInvoiceNumber}`
+            }, connection);
+          }
+        } catch (ledgErr) {
+          console.warn('[Customer Ledger SO Invoice Notice]:', ledgErr.message);
+        }
+      }
+
+      if (activePaymentMode !== 'credit' && activePaymentMode !== 'due' && activePaymentMode !== 'udhar') {
+        try {
+          const immediateNonCredit = Math.max(0, grandTotal - advanceApplied);
+          if (immediateNonCredit > 0) {
+            await FinancialAccountService.recordSaleTransaction(connection, {
+              restaurantId,
+              orderId: invoiceId,
+              orderNumber: uniqueInvoiceNumber,
+              paymentMode: activePaymentMode,
+              paymentDetails: null,
+              totalAmount: immediateNonCredit,
+              customerName: salesOrder.customer_name,
+              customerId: salesOrder.customer_id,
+              userId: safeCashierId,
+              userName: safeCashierName || 'Staff'
+            });
+          }
         } catch (finErr) {
           console.warn('[Financial Account Sales Order Invoice Warning]:', finErr.message);
         }

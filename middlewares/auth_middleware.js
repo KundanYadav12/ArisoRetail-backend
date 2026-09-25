@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { JWT_SECRET } = require('../config/jwt_config');
+const { DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS } = require('../config/permissions_config');
 
 /**
  * Main authentication middleware
@@ -21,7 +22,7 @@ async function authenticateToken(req, res, next) {
     
     // Fetch user details to verify state
     const [rows] = await pool.execute(
-      'SELECT u.id, u.restaurant_id, u.name, u.username, u.role, u.assigned_warehouse_id, u.is_active, u.active_session_id, r.subscription_status, r.subscription_expires_at, r.name as restaurant_name ' +
+      'SELECT u.id, u.restaurant_id, u.name, u.username, u.role, u.assigned_warehouse_id, u.permissions, u.is_active, u.active_session_id, r.subscription_status, r.subscription_expires_at, r.name as restaurant_name ' +
       'FROM users u LEFT JOIN restaurants r ON u.restaurant_id = r.id ' +
       'WHERE u.id = ? AND u.is_active = 1',
       [decoded.id]
@@ -63,6 +64,18 @@ async function authenticateToken(req, res, next) {
       }
     }
 
+    // Parse user permissions
+    let parsedPermissions = [];
+    if (user.permissions) {
+      try {
+        parsedPermissions = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions;
+      } catch {
+        parsedPermissions = [];
+      }
+    } else if (userRole === 'warehouse_manager') {
+      parsedPermissions = DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS;
+    }
+
     // Attach user information to request
     req.user = {
       id: user.id,
@@ -72,6 +85,7 @@ async function authenticateToken(req, res, next) {
       username: user.username,
       role: user.role,
       assigned_warehouse_id: user.assigned_warehouse_id || null,
+      permissions: Array.isArray(parsedPermissions) ? parsedPermissions : [],
       shift_id: decoded.shift_id
     };
 
@@ -137,6 +151,38 @@ function authorizeRoles(...allowedRoles) {
 }
 
 /**
+ * Granular Permission checking middleware
+ * Checks if current user possesses the required permission.
+ * Admins, owners, and superadmins are granted full access.
+ */
+function requirePermission(permissionKey) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthenticated.' });
+    }
+
+    const role = (req.user.role || '').toLowerCase();
+    // Admin, owner, super_admin bypass granular sub-checks
+    if (['admin', 'owner', 'super_admin', 'superadmin'].includes(role)) {
+      return next();
+    }
+
+    if (role === 'warehouse_manager') {
+      const permissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
+      if (permissions.includes(permissionKey) || permissions.includes('all')) {
+        return next();
+      }
+
+      return res.status(403).json({
+        error: `Access Denied: Missing permission '${permissionKey}'. Contact your Administrator.`
+      });
+    }
+
+    next();
+  };
+}
+
+/**
  * Enforces warehouse isolation for warehouse_manager roles
  */
 function enforceWarehouseScope(req, res, next) {
@@ -148,11 +194,21 @@ function enforceWarehouseScope(req, res, next) {
   if (role === 'warehouse_manager' && req.user.assigned_warehouse_id) {
     const assignedWhId = parseInt(req.user.assigned_warehouse_id, 10);
 
+    // If request explicitly targets a different warehouse, reject it
     if (req.body && req.body.warehouse_id && parseInt(req.body.warehouse_id, 10) !== assignedWhId) {
       return res.status(403).json({ error: 'Access denied: Warehouse Manager is restricted to their assigned warehouse.' });
     }
     if (req.query && req.query.warehouse_id && req.query.warehouse_id !== 'all' && parseInt(req.query.warehouse_id, 10) !== assignedWhId) {
       return res.status(403).json({ error: 'Access denied: Warehouse Manager is restricted to their assigned warehouse.' });
+    }
+
+    // Transfers: Ensure at least one side is the assigned warehouse
+    if (req.body && (req.body.from_warehouse_id || req.body.to_warehouse_id)) {
+      const fromId = req.body.from_warehouse_id ? parseInt(req.body.from_warehouse_id, 10) : null;
+      const toId = req.body.to_warehouse_id ? parseInt(req.body.to_warehouse_id, 10) : null;
+      if (fromId && toId && fromId !== assignedWhId && toId !== assignedWhId) {
+        return res.status(403).json({ error: 'Access denied: Stock transfer must involve your assigned warehouse.' });
+      }
     }
 
     if (req.query && (!req.query.warehouse_id || req.query.warehouse_id === 'all')) {
@@ -170,6 +226,8 @@ module.exports = {
   authenticateToken,
   optionalAuthenticateToken,
   authorizeRoles,
+  requirePermission,
   enforceWarehouseScope
 };
+
 

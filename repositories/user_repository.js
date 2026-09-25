@@ -53,13 +53,21 @@ class UserRepository {
     const [rows] = await pool.execute(
       `SELECT u.id, u.restaurant_id, u.name, u.username, u.email, u.role, u.is_active, 
               u.must_change_password, u.is_verified, u.active_session_id,
-              r.name as restaurant_name, r.logo_url as restaurant_logo_url 
+              u.assigned_warehouse_id, u.permissions,
+              r.name as restaurant_name, r.logo_url as restaurant_logo_url,
+              w.name as assigned_warehouse_name
        FROM users u 
        LEFT JOIN restaurants r ON u.restaurant_id = r.id 
+       LEFT JOIN warehouses w ON u.assigned_warehouse_id = w.id
        WHERE u.id = ?`,
       [id]
     );
-    return rows[0];
+    if (!rows[0]) return null;
+    const user = rows[0];
+    if (user.permissions && typeof user.permissions === 'string') {
+      try { user.permissions = JSON.parse(user.permissions); } catch { user.permissions = []; }
+    }
+    return user;
   }
 
   static async getUserCount(restaurantId) {
@@ -72,10 +80,19 @@ class UserRepository {
 
   static async getAllByRestaurant(restaurantId) {
     const [rows] = await pool.execute(
-      'SELECT id, name, username, email, role, is_active, must_change_password, is_verified, created_at FROM users WHERE restaurant_id = ? ORDER BY id DESC',
+      `SELECT u.id, u.name, u.username, u.email, u.role, u.is_active, 
+              u.must_change_password, u.is_verified, u.created_at,
+              u.assigned_warehouse_id, u.permissions, w.name as assigned_warehouse_name
+       FROM users u
+       LEFT JOIN warehouses w ON u.assigned_warehouse_id = w.id
+       WHERE u.restaurant_id = ? 
+       ORDER BY u.id DESC`,
       [restaurantId]
     );
-    return rows;
+    return rows.map(r => ({
+      ...r,
+      permissions: r.permissions ? (typeof r.permissions === 'string' ? JSON.parse(r.permissions) : r.permissions) : []
+    }));
   }
 
   static async getUsersByRestaurant(restaurantId) {
@@ -83,14 +100,15 @@ class UserRepository {
   }
 
   static async create(user) {
-    const { restaurant_id, name, username, email, password_hash, role, is_active, must_change_password, is_verified, temp_password } = user;
+    const { restaurant_id, name, username, email, password_hash, role, is_active, must_change_password, is_verified, temp_password, assigned_warehouse_id, permissions } = user;
     const activeState = is_active !== undefined ? (is_active ? 1 : 0) : 1;
     const mustChange = must_change_password ? 1 : 0;
     const verified = is_verified ? 1 : 0;
+    const serializedPerms = permissions ? (typeof permissions === 'string' ? permissions : JSON.stringify(permissions)) : null;
     
     const [result] = await pool.execute(
-      'INSERT INTO users (restaurant_id, name, username, email, password_hash, role, is_active, must_change_password, is_verified, temp_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [restaurant_id, name, username, email || null, password_hash || 'PENDING_ACTIVATION', role || 'cashier', activeState, mustChange, verified, temp_password || null]
+      'INSERT INTO users (restaurant_id, name, username, email, password_hash, role, is_active, must_change_password, is_verified, temp_password, assigned_warehouse_id, permissions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [restaurant_id, name, username, email || null, password_hash || 'PENDING_ACTIVATION', role || 'cashier', activeState, mustChange, verified, temp_password || null, assigned_warehouse_id || null, serializedPerms]
     );
     return result.insertId;
   }
@@ -120,20 +138,30 @@ class UserRepository {
   }
 
   static async update(id, restaurantId, user) {
-    const { name, email, role, is_active, password_hash } = user;
+    const { name, email, role, is_active, password_hash, assigned_warehouse_id, permissions } = user;
+    const serializedPerms = permissions !== undefined ? (typeof permissions === 'string' ? permissions : JSON.stringify(permissions)) : undefined;
+
+    let query = 'UPDATE users SET name = ?, email = ?, role = ?, is_active = ?';
+    const params = [name, email || null, role, is_active];
+
     if (password_hash) {
-      const [result] = await pool.execute(
-        'UPDATE users SET name = ?, email = ?, role = ?, is_active = ?, password_hash = ? WHERE id = ? AND restaurant_id = ?',
-        [name, email || null, role, is_active, password_hash, id, restaurantId]
-      );
-      return result.affectedRows > 0;
-    } else {
-      const [result] = await pool.execute(
-        'UPDATE users SET name = ?, email = ?, role = ?, is_active = ? WHERE id = ? AND restaurant_id = ?',
-        [name, email || null, role, is_active, id, restaurantId]
-      );
-      return result.affectedRows > 0;
+      query += ', password_hash = ?';
+      params.push(password_hash);
     }
+    if (assigned_warehouse_id !== undefined) {
+      query += ', assigned_warehouse_id = ?';
+      params.push(assigned_warehouse_id || null);
+    }
+    if (serializedPerms !== undefined) {
+      query += ', permissions = ?';
+      params.push(serializedPerms);
+    }
+
+    query += ' WHERE id = ? AND restaurant_id = ?';
+    params.push(id, restaurantId);
+
+    const [result] = await pool.execute(query, params);
+    return result.affectedRows > 0;
   }
 
   static async delete(id, restaurantId) {

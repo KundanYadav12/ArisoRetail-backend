@@ -88,7 +88,14 @@ class OrderController {
         price_list: price_list || 'standard',
         reference_number: reference_number || null,
         additional_charges: additional_charges || null,
-        is_sales_order: is_sales_order ? 1 : 0
+        is_sales_order: is_sales_order ? 1 : 0,
+        paid_amount: req.body.paid_amount !== undefined ? req.body.paid_amount : undefined,
+        payment_status: req.body.payment_status || undefined,
+        due_date: req.body.due_date || null,
+        credit_days: req.body.credit_days !== undefined ? req.body.credit_days : undefined,
+        down_payment_mode: req.body.down_payment_mode || undefined,
+        advance_amount: req.body.advance_amount !== undefined ? req.body.advance_amount : 0,
+        payment_details: payment_details || null
       };
 
       const createdOrder = await OrderRepository.create(restaurantId, orderData, sanitizedItems, safeIdempotencyKey);

@@ -19,6 +19,7 @@ router.post('/reset-password', AuthController.activatePassword);
 router.post('/change-password', authenticateToken, AuthController.changePassword);
 
 // Staff User Management Routes
+router.get('/permissions', authenticateToken, AuthController.getSystemPermissions);
 router.get('/users', authenticateToken, AuthController.getUsers);
 router.post('/users', authenticateToken, AuthController.createUser);
 router.put('/users/:id', authenticateToken, AuthController.updateUser);

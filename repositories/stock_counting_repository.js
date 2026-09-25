@@ -229,19 +229,96 @@ class StockCountingRepository {
    * If not assigned, rejects scan and prevents modification of inventory.
    */
   static async validateBarcodeScan(restaurantId, scanData) {
-    const { device_code, barcode, warehouse_id = null, rack_id = null } = scanData;
+    const { device_code = null, barcode, warehouse_id = null, rack_id = null } = scanData;
 
-    if (!device_code || !barcode) {
+    if (!barcode || !String(barcode).trim()) {
       return {
         success: false,
         code: 'MISSING_PARAMS',
-        message: 'device_code and barcode are required.'
+        message: 'Barcode is required.'
       };
     }
 
-    const trimmedCode = device_code.trim();
-    const trimmedBarcode = barcode.trim();
+    const trimmedBarcode = String(barcode).trim();
+    const trimmedCode = device_code ? String(device_code).trim() : null;
 
+    // Case 1: Standalone / Camera scan without a registered device
+    if (!trimmedCode) {
+      let targetWarehouseId = warehouse_id;
+      if (!targetWarehouseId) {
+        const [whRows] = await pool.execute(
+          'SELECT id FROM warehouses WHERE restaurant_id = ? AND is_active = 1 ORDER BY is_default DESC, id ASC LIMIT 1',
+          [restaurantId]
+        );
+        if (whRows.length > 0) {
+          targetWarehouseId = whRows[0].id;
+        }
+      }
+
+      // Lookup product by barcode (or SKU/item_code)
+      const [itemRows] = await pool.execute(`
+        SELECT id, name, sku, barcode, item_code, unit, price, cost_price, current_stock
+        FROM menu_items
+        WHERE restaurant_id = ? AND (barcode = ? OR sku = ? OR item_code = ?)
+        LIMIT 1
+      `, [restaurantId, trimmedBarcode, trimmedBarcode, trimmedBarcode]);
+
+      if (itemRows.length === 0) {
+        return {
+          success: false,
+          code: 'NO_DATA',
+          message: `No item found for barcode "${trimmedBarcode}"`
+        };
+      }
+
+      const product = itemRows[0];
+      let systemStock = 0;
+      let rackCode = null;
+      let rackName = null;
+
+      if (rack_id) {
+        const [prs] = await pool.execute(
+          'SELECT current_stock FROM product_rack_stocks WHERE restaurant_id = ? AND warehouse_id = ? AND rack_id = ? AND menu_item_id = ?',
+          [restaurantId, targetWarehouseId, rack_id, product.id]
+        );
+        if (prs.length > 0) systemStock = parseFloat(prs[0].current_stock || 0);
+
+        const [rRows] = await pool.execute('SELECT rack_code, rack_name FROM warehouse_racks WHERE id = ?', [rack_id]);
+        if (rRows.length > 0) {
+          rackCode = rRows[0].rack_code;
+          rackName = rRows[0].rack_name;
+        }
+      } else if (targetWarehouseId) {
+        const [ws] = await pool.execute(
+          'SELECT current_stock FROM warehouse_stocks WHERE restaurant_id = ? AND warehouse_id = ? AND menu_item_id = ?',
+          [restaurantId, targetWarehouseId, product.id]
+        );
+        if (ws.length > 0) systemStock = parseFloat(ws[0].current_stock || 0);
+      }
+
+      return {
+        success: true,
+        code: 'PRODUCT_VERIFIED',
+        device: null,
+        assignment_id: null,
+        product: {
+          id: product.id,
+          name: product.name,
+          sku: product.sku,
+          barcode: product.barcode,
+          item_code: product.item_code,
+          unit: product.unit || 'pcs',
+          cost_price: parseFloat(product.cost_price || 0)
+        },
+        warehouse_id: targetWarehouseId,
+        rack_id: rack_id || null,
+        rack_code: rackCode,
+        rack_name: rackName,
+        system_stock: systemStock
+      };
+    }
+
+    // Case 2: Registered Hardware Scanner / Device terminal
     // 1. Verify device exists and is active
     const [devRows] = await pool.execute(
       'SELECT id, warehouse_id, status FROM stock_counting_devices WHERE restaurant_id = ? AND device_code = ?',

@@ -7,6 +7,7 @@ const SuperAdminRepository = require('../repositories/superadmin_repository');
 const OTPService = require('../services/otp_service');
 
 const { JWT_SECRET, JWT_REFRESH_SECRET, JWT_EXPIRY, JWT_REFRESH_EXPIRY } = require('../config/jwt_config');
+const { DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS, ALL_SYSTEM_PERMISSIONS } = require('../config/permissions_config');
 
 class AuthController {
   static async login(req, res) {
@@ -76,6 +77,23 @@ class AuthController {
       const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, barcode_scanner_enabled FROM restaurants WHERE id = ?', [targetRestId]);
       if (rRows.length > 0) restInfo = rRows[0];
 
+      let whName = null;
+      if (user.assigned_warehouse_id) {
+        const [whRows] = await pool.query('SELECT name FROM warehouses WHERE id = ?', [user.assigned_warehouse_id]);
+        if (whRows.length > 0) whName = whRows[0].name;
+      }
+
+      let parsedUserPerms = [];
+      if (user.permissions) {
+        try {
+          parsedUserPerms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions;
+        } catch {
+          parsedUserPerms = [];
+        }
+      } else if (user.role === 'warehouse_manager') {
+        parsedUserPerms = DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS;
+      }
+
       return res.json({
         message: 'Login successful',
         accessToken,
@@ -93,7 +111,10 @@ class AuthController {
           barcode_scanner_enabled: Boolean(restInfo.barcode_scanner_enabled),
           shift_id: activeShiftId,
           must_change_password: Boolean(user.must_change_password),
-          is_verified: Boolean(user.is_verified)
+          is_verified: Boolean(user.is_verified),
+          assigned_warehouse_id: user.assigned_warehouse_id || null,
+          assigned_warehouse_name: whName,
+          permissions: Array.isArray(parsedUserPerms) ? parsedUserPerms : []
         }
       });
     } catch (err) {
@@ -116,6 +137,17 @@ class AuthController {
         ? await SuperAdminRepository.getRestaurantById(user.restaurant_id) 
         : null;
 
+      let userPerms = [];
+      if (user.permissions) {
+        try {
+          userPerms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions;
+        } catch {
+          userPerms = [];
+        }
+      } else if (user.role === 'warehouse_manager') {
+        userPerms = DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS;
+      }
+
       const userProfile = {
         id: user.id,
         restaurant_id: user.restaurant_id,
@@ -130,7 +162,10 @@ class AuthController {
         is_verified: Boolean(user.is_verified),
         shift_id: req.user.shift_id || null,
         feature_superbill: restaurant ? Boolean(restaurant.feature_superbill) : false,
-        barcode_scanner_enabled: restaurant ? Boolean(restaurant.barcode_scanner_enabled) : false
+        barcode_scanner_enabled: restaurant ? Boolean(restaurant.barcode_scanner_enabled) : false,
+        assigned_warehouse_id: user.assigned_warehouse_id || null,
+        assigned_warehouse_name: user.assigned_warehouse_name || null,
+        permissions: Array.isArray(userPerms) ? userPerms : []
       };
 
       return res.json({ user: userProfile });
@@ -274,25 +309,29 @@ class AuthController {
   }
 
   /**
-   * Add Staff User (Enforces Max User Limits)
+   * Add Staff User (Enforces Max User Limits & Supports Warehouse Manager Role)
    */
   static async createUser(req, res) {
-    const { name, username, email, password, role } = req.body;
+    const { name, username, email, password, role, assigned_warehouse_id, permissions } = req.body;
     const restaurantId = req.user.restaurant_id || req.user.restaurantId;
 
-    if (!name || !name.trim() || !password || !password.trim()) {
-      return res.status(400).json({ error: 'Name and Password are required.' });
+    const loginId = (email || username || '').trim();
+    if (!loginId) {
+      return res.status(400).json({ error: 'Login ID is required.' });
+    }
+    if (!password || !password.trim()) {
+      return res.status(400).json({ error: 'Password is required.' });
     }
 
-    const cleanName = name.trim();
-    const cleanUsername = (username && username.trim()) ? username.trim() : cleanName.toLowerCase().replace(/\s+/g, '_');
+    const cleanName = (name && name.trim()) ? name.trim() : ((username && username.trim()) || loginId.split('@')[0]);
+    const cleanUsername = (username && username.trim()) ? username.trim() : (loginId.includes('@') ? loginId.split('@')[0] : loginId.toLowerCase().replace(/\s+/g, '_'));
     
-    // Auto-fallback email if email was left blank by Admin
-    let cleanEmail = (email && email.trim()) ? email.trim().toLowerCase() : `${cleanUsername}@restaurant${restaurantId || 1}.local`;
+    // Auto-fallback email if email was left blank or loginId is a username
+    let cleanEmail = loginId.includes('@') ? loginId.toLowerCase() : `${cleanUsername}@restaurant${restaurantId || 1}.local`;
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(cleanEmail)) {
-      return res.status(400).json({ error: 'Please provide a valid email address.' });
+      cleanEmail = `${cleanUsername.replace(/[^a-zA-Z0-9_]/g, '') || 'staff'}@restaurant${restaurantId || 1}.local`;
     }
 
     if (role && ['super_admin', 'superadmin'].includes(role.toLowerCase())) {
@@ -323,20 +362,31 @@ class AuthController {
         });
       }
 
-      // 3. Hash password & create staff
+      // 3. Resolve permissions
+      let finalPermissions = permissions;
+      if (role === 'warehouse_manager') {
+        if (!finalPermissions || !Array.isArray(finalPermissions) || finalPermissions.length === 0) {
+          finalPermissions = DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS;
+        }
+      }
+
+      // 4. Hash password & create staff
       const userUsername = (username && username.trim()) || cleanEmail.split('@')[0];
       const passwordHash = await bcrypt.hash(password, 10);
       const userId = await UserRepository.create({
         restaurant_id: restaurantId,
-        name,
+        name: cleanName,
         username: userUsername,
         email: cleanEmail,
         password_hash: passwordHash,
         role: role || 'cashier',
-        is_active: 1
+        is_active: 1,
+        assigned_warehouse_id: assigned_warehouse_id ? parseInt(assigned_warehouse_id, 10) : null,
+        permissions: finalPermissions || null
       });
 
-      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'USER_CREATE', `Created staff user: ${name} (${role})`, req.ip);
+      const whDetails = assigned_warehouse_id ? ` (Warehouse #${assigned_warehouse_id})` : '';
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'USER_CREATE', `Created staff user: ${cleanName} (${role})${whDetails}`, req.ip);
 
       return res.status(201).json({ message: 'Staff user created successfully.', id: userId });
     } catch (err) {
@@ -356,21 +406,31 @@ class AuthController {
   }
 
   static async updateUser(req, res) {
-    const { name, email, role, is_active, password } = req.body;
+    const { name, email, role, is_active, password, assigned_warehouse_id, permissions } = req.body;
     const userId = req.params.id;
     const restaurantId = req.user.restaurant_id;
 
-    if (!name || !role) {
-      return res.status(400).json({ error: 'Name and Role are required.' });
+    if (!role) {
+      return res.status(400).json({ error: 'Role is required.' });
     }
+
+    const cleanName = (name && name.trim()) ? name.trim() : (email ? email.split('@')[0] : 'Staff');
 
     try {
       const updateData = {
-        name,
+        name: cleanName,
         email: email || null,
         role,
         is_active: is_active !== undefined ? (is_active ? 1 : 0) : 1
       };
+
+      if (assigned_warehouse_id !== undefined) {
+        updateData.assigned_warehouse_id = assigned_warehouse_id ? parseInt(assigned_warehouse_id, 10) : null;
+      }
+
+      if (permissions !== undefined) {
+        updateData.permissions = Array.isArray(permissions) ? permissions : (permissions ? JSON.parse(permissions) : []);
+      }
 
       if (password && password.trim().length >= 6) {
         updateData.password_hash = await bcrypt.hash(password.trim(), 10);
@@ -381,12 +441,24 @@ class AuthController {
         return res.status(404).json({ error: 'Staff user not found.' });
       }
 
-      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'USER_UPDATE', `Updated staff user: ${name} (${role})`, req.ip);
+      const whInfo = assigned_warehouse_id !== undefined ? ` (Warehouse: ${assigned_warehouse_id || 'All'})` : '';
+      const permInfo = permissions ? ` with updated permissions` : '';
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'USER_UPDATE', `Updated staff user: ${cleanName} (${role})${whInfo}${permInfo}`, req.ip);
       return res.json({ message: 'Staff user updated successfully.' });
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to update staff user.' });
     }
+  }
+
+  /**
+   * Return all system permissions metadata and defaults
+   */
+  static getSystemPermissions(req, res) {
+    return res.json({
+      permissions: ALL_SYSTEM_PERMISSIONS,
+      defaultWarehouseManager: DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS
+    });
   }
 
   static async deleteUser(req, res) {
@@ -495,43 +567,19 @@ class AuthController {
           restaurant_name: restInfo.name || user.name || 'Ariso Retail Store',
           restaurant_logo_url: restInfo.logo_url || null,
           feature_superbill: Boolean(restInfo.feature_superbill),
-          shift_id: activeShiftId
+          shift_id: activeShiftId,
+          assigned_warehouse_id: user.assigned_warehouse_id || null,
+          permissions: (() => {
+            if (user.permissions) {
+              try { return typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions; } catch { return []; }
+            }
+            return user.role === 'warehouse_manager' ? DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS : [];
+          })()
         }
       });
     } catch (err) {
       console.error('Refresh token error:', err.message);
       return res.status(401).json({ error: 'Refresh token is invalid or has expired.', code: 'REFRESH_TOKEN_EXPIRED' });
-    }
-  }
-
-  static async getMe(req, res) {
-    try {
-      const user = await UserRepository.findById(req.user.id);
-      if (!user) return res.status(404).json({ error: 'User not found.' });
-
-      let restInfo = {};
-      const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill FROM restaurants WHERE id = ?', [targetRestId]);
-      if (rRows.length > 0) restInfo = rRows[0];
-
-      return res.json({
-        user: {
-          id: user.id,
-          name: user.name,
-          username: user.username,
-          email: user.email,
-          role: user.role,
-          restaurant_id: targetRestId,
-          restaurant_name: restInfo.name || user.name || 'Ariso Retail Store',
-          restaurant_logo_url: restInfo.logo_url || null,
-          feature_superbill: Boolean(restInfo.feature_superbill),
-          must_change_password: Boolean(user.must_change_password),
-          is_verified: Boolean(user.is_verified)
-        }
-      });
-    } catch (err) {
-      console.error('getMe error:', err);
-      return res.status(500).json({ error: 'Failed to fetch user session.' });
     }
   }
 

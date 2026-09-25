@@ -28,6 +28,8 @@ const financeRoutes = require('./routes/financial_account_routes');
 const expenseRoutes = require('./routes/expense_routes');
 const dayEndRoutes = require('./routes/day_end_routes');
 const paymentReconciliationRoutes = require('./routes/payment_reconciliation_routes');
+const heldReceiptRoutes = require('./routes/held_receipt_routes');
+const customerReceivableRoutes = require('./routes/customer_receivable_routes');
 
 const { apiLimiter, authLimiter } = require('./middlewares/rate_limiter_middleware');
 
@@ -126,6 +128,8 @@ app.use('/api/finance', financeRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/day-end', dayEndRoutes);
 app.use('/api/payment-reconciliation', paymentReconciliationRoutes);
+app.use('/api/held-receipts', heldReceiptRoutes);
+app.use('/api/receivables', customerReceivableRoutes);
 
 const ThemeController = require('./controllers/theme_controller');
 app.get('/api/theme/config', ThemeController.getTheme);

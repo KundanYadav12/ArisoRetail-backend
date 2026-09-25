@@ -91,19 +91,21 @@ class CustomerRepository {
     const cleanPlaceOfSupply = (place_of_supply && place_of_supply.trim()) || null;
     const cleanPan = (pan_number && pan_number.trim()) || null;
     const cleanCreditLimit = parseFloat(credit_limit || 0);
+    const cleanCreditDays = parseInt(data.credit_days || 0);
+    const cleanAllowCredit = data.allow_credit !== undefined ? (data.allow_credit ? 1 : 0) : 1;
     const cleanOpeningBalance = parseFloat(opening_balance || 0);
 
     const [result] = await db.execute(
       `INSERT INTO customers (
          restaurant_id, name, phone, email, address, store_name, gst_number, notes,
          contact_person, shipping_address, place_of_supply, pan_number, credit_limit,
-         opening_balance, current_balance
+         credit_days, allow_credit, opening_balance, current_balance
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         restaurantId, cleanName, cleanPhone, cleanEmail, cleanAddress, cleanStoreName, cleanGst, cleanNotes,
         cleanContactPerson, cleanShippingAddress, cleanPlaceOfSupply, cleanPan, cleanCreditLimit,
-        cleanOpeningBalance, cleanOpeningBalance
+        cleanCreditDays, cleanAllowCredit, cleanOpeningBalance, cleanOpeningBalance
       ]
     );
 
@@ -122,6 +124,8 @@ class CustomerRepository {
       place_of_supply: cleanPlaceOfSupply,
       pan_number: cleanPan,
       credit_limit: cleanCreditLimit,
+      credit_days: cleanCreditDays,
+      allow_credit: cleanAllowCredit,
       opening_balance: cleanOpeningBalance,
       current_balance: cleanOpeningBalance
     };
@@ -145,6 +149,8 @@ class CustomerRepository {
       place_of_supply,
       pan_number,
       credit_limit,
+      credit_days,
+      allow_credit,
       opening_balance,
       current_balance
     } = data;
@@ -163,6 +169,8 @@ class CustomerRepository {
          place_of_supply = COALESCE(?, place_of_supply),
          pan_number = COALESCE(?, pan_number),
          credit_limit = COALESCE(?, credit_limit),
+         credit_days = COALESCE(?, credit_days),
+         allow_credit = COALESCE(?, allow_credit),
          opening_balance = COALESCE(?, opening_balance),
          current_balance = COALESCE(?, current_balance)
        WHERE id = ? AND restaurant_id = ?`,
@@ -179,6 +187,8 @@ class CustomerRepository {
         place_of_supply !== undefined ? place_of_supply : null,
         pan_number !== undefined ? pan_number : null,
         credit_limit !== undefined ? parseFloat(credit_limit || 0) : null,
+        credit_days !== undefined ? parseInt(credit_days || 0) : null,
+        allow_credit !== undefined ? (allow_credit ? 1 : 0) : null,
         opening_balance !== undefined ? parseFloat(opening_balance || 0) : null,
         current_balance !== undefined ? parseFloat(current_balance || 0) : null,
         id,

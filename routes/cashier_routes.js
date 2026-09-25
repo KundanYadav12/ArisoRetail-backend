@@ -1,9 +1,12 @@
 const express = require('express');
-const { authenticateToken } = require('../middlewares/auth_middleware');
+const { authenticateToken, requirePermission } = require('../middlewares/auth_middleware');
 const pool = require('../config/db');
 const { getISTDateString } = require('../utils/date_utils');
 
 const router = express.Router();
+
+router.use(authenticateToken);
+router.use(requirePermission('pos_billing'));
 
 /**
  * Helper to ensure cash_movements table exists in MySQL

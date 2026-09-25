@@ -1,6 +1,6 @@
 const express = require('express');
 const ReportController = require('../controllers/report_controller');
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, requirePermission } = require('../middlewares/auth_middleware');
 const router = express.Router();
 
 router.use(authenticateToken);
@@ -14,10 +14,10 @@ router.get('/export/sales-excel', authorizeRoles('admin', 'manager', 'owner', 's
 router.get('/export/sales-csv', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), ReportController.exportSalesCSV);
 
 // Item-wise Sales Analytics routes
-router.get('/item-wise/export-excel', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), ReportController.exportItemSalesExcel);
-router.get('/item-wise/export-csv', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), ReportController.exportItemSalesCSV);
-router.get('/item-wise/:id/history', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), ReportController.getItemSalesHistory);
-router.get('/item-wise', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), ReportController.getItemWiseReport);
+router.get('/item-wise/export-excel', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.exportItemSalesExcel);
+router.get('/item-wise/export-csv', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.exportItemSalesCSV);
+router.get('/item-wise/:id/history', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.getItemSalesHistory);
+router.get('/item-wise', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.getItemWiseReport);
 
 // CA-Ready GST Slab Report routes
 router.get('/gst-slab/export-excel', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), ReportController.exportGstSlabExcel);
