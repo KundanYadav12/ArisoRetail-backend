@@ -15,6 +15,8 @@ router.get('/gstr-1', authorizeRoles('admin', 'manager', 'owner', 'super_admin',
 router.get('/gstr-1/export-excel', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), GstController.exportGstr1Excel);
 router.get('/gstr-2', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), GstController.getGstr2);
 router.get('/gstr-2/export-excel', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), GstController.exportGstr2Excel);
+router.get('/gstr-3b', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), GstController.getGstr3b);
+router.get('/gstr-3b/export-excel', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), GstController.exportGstr3bExcel);
 router.get('/hsn-summary', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin'), GstController.getHsnSummary);
 
 // 3. Sales Returns & Credit Notes

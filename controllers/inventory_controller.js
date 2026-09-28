@@ -8,6 +8,8 @@ const StockAdjustmentRepository = require('../repositories/stock_adjustment_repo
 const StockLedgerRepository = require('../repositories/stock_ledger_repository');
 const { generateExcelWorkbook } = require('../utils/excel_helper');
 const { getISTDateString, formatLocalDate } = require('../utils/date_utils');
+const { generatePurchaseBillPDF, fetchFullBill, fetchBranding } = require('../services/purchase_bill_pdf_service');
+const nodemailer = require('nodemailer');
 
 class InventoryController {
   /* =========================================================================
@@ -416,11 +418,28 @@ class InventoryController {
       const order = await PurchaseRepository.getPOById(req.params.id, req.user.restaurant_id);
       if (!order) return res.status(404).json({ error: 'Purchase order not found.' });
 
-      // Also attach related GRNs and Bills for the detail view
+      // Also attach related GRNs (with items) and Bills for the detail view
       const grns = await PurchaseRepository.getGRNs(req.user.restaurant_id, { purchase_order_id: req.params.id });
-      const bills = await PurchaseRepository.getBills(req.user.restaurant_id, { purchase_order_id_filter: req.params.id });
+      if (Array.isArray(grns)) {
+        for (const grn of grns) {
+          const fullGrn = await PurchaseRepository.getGRNById(grn.id, req.user.restaurant_id);
+          if (fullGrn) grn.items = fullGrn.items;
+        }
+      }
+      const rawBills = await PurchaseRepository.getBills(req.user.restaurant_id, { purchase_order_id: req.params.id });
+      const strictBills = Array.isArray(rawBills)
+        ? rawBills.filter(b => b && b.purchase_order_id && String(b.purchase_order_id) === String(req.params.id))
+        : [];
+      const seenBillKeys = new Set();
+      const uniqueBills = strictBills.filter(b => {
+        const key = b.id || b.internal_bill_number;
+        if (!key || seenBillKeys.has(key)) return false;
+        seenBillKeys.add(key);
+        return true;
+      });
       order.grns = grns;
-      order.related_bills = bills;
+      order.bills = uniqueBills;
+      order.related_bills = uniqueBills;
       return res.json(order);
     } catch (err) {
       return res.status(500).json({ error: err.message });
@@ -503,6 +522,19 @@ class InventoryController {
     try {
       const grn = await PurchaseRepository.getGRNById(req.params.id, req.user.restaurant_id);
       if (!grn) return res.status(404).json({ error: 'GRN not found.' });
+      const rawBills = await PurchaseRepository.getBills(req.user.restaurant_id, { grn_id: req.params.id });
+      const strictBills = Array.isArray(rawBills)
+        ? rawBills.filter(b => b && b.grn_id && String(b.grn_id) === String(req.params.id))
+        : [];
+      const seenBillKeys = new Set();
+      const uniqueBills = strictBills.filter(b => {
+        const key = b.id || b.internal_bill_number;
+        if (!key || seenBillKeys.has(key)) return false;
+        seenBillKeys.add(key);
+        return true;
+      });
+      grn.bills = uniqueBills;
+      grn.related_bills = uniqueBills;
       return res.json(grn);
     } catch (err) {
       return res.status(500).json({ error: err.message });
@@ -564,6 +596,24 @@ class InventoryController {
     }
   }
 
+  static async getNextPurchaseBillNumber(req, res) {
+    try {
+      const nextNumber = await PurchaseRepository.getNextBillNumber(
+        req.user.restaurant_id,
+        req.query.bill_date || null
+      );
+      return res.json({
+        success: true,
+        next_bill_number: nextNumber,
+        nextNumber,
+        bill_number: nextNumber
+      });
+    } catch (err) {
+      console.error('Get next purchase bill number error:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
   static async createPurchaseBill(req, res) {
     try {
       const bill = await PurchaseRepository.createBill(
@@ -576,6 +626,69 @@ class InventoryController {
     } catch (err) {
       console.error('Create purchase bill error:', err);
       return res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Purchase Bill PDF Download
+  static async downloadPurchaseBillPDF(req, res) {
+    try {
+      const pdfBuffer = await generatePurchaseBillPDF(req.params.id, req.user.restaurant_id);
+      const bill = await PurchaseRepository.getBillById(req.params.id, req.user.restaurant_id);
+      if (!bill) return res.status(404).json({ error: 'Purchase bill not found.' });
+      const filename = `Purchase-Bill-${bill.internal_bill_number || bill.id}.pdf`;
+      res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': pdfBuffer.length
+      });
+      return res.send(pdfBuffer);
+    } catch (err) {
+      console.error('Download bill PDF error:', err);
+      return res.status(500).json({ error: 'Failed to generate PDF: ' + err.message });
+    }
+  }
+
+  // Purchase Bill Email
+  static async emailPurchaseBill(req, res) {
+    try {
+      const { to, subject, message } = req.body;
+      if (!to) return res.status(400).json({ error: 'Recipient email (to) is required.' });
+
+      const pdfBuffer = await generatePurchaseBillPDF(req.params.id, req.user.restaurant_id);
+      const bill = await PurchaseRepository.getBillById(req.params.id, req.user.restaurant_id);
+      if (!bill) return res.status(404).json({ error: 'Purchase bill not found.' });
+      const branding = await fetchBranding(req.user.restaurant_id);
+
+      const transporter = nodemailer.createTransport({
+        host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+        port: parseInt(process.env.EMAIL_PORT || '587'),
+        secure: false,
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS
+        }
+      });
+
+      const filename = `Purchase-Bill-${bill.internal_bill_number || bill.id}.pdf`;
+      const defaultSubject = `Purchase Bill ${bill.internal_bill_number} from ${branding.restaurant_name || 'Us'}`;
+      const defaultMessage = `Dear ${bill.supplier_name || 'Vendor'},\n\nPlease find attached Purchase Bill ${bill.internal_bill_number} dated ${bill.bill_date ? new Date(bill.bill_date).toLocaleDateString('en-IN') : ''} for ₹${parseFloat(bill.total_amount || 0).toFixed(2)}.\n\nThank you for your business.\n\nRegards,\n${branding.restaurant_name || ''}`;
+
+      await transporter.sendMail({
+        from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+        to: to.trim(),
+        subject: subject || defaultSubject,
+        text: message || defaultMessage,
+        attachments: [{
+          filename,
+          content: pdfBuffer,
+          contentType: 'application/pdf'
+        }]
+      });
+
+      return res.json({ message: `Purchase bill emailed successfully to ${to}.` });
+    } catch (err) {
+      console.error('Email bill error:', err);
+      return res.status(500).json({ error: 'Failed to send email: ' + err.message });
     }
   }
 

@@ -7,7 +7,7 @@ const StockCountingController = require('../controllers/stock_counting_controlle
 const { authenticateToken, authorizeRoles, requirePermission, enforceWarehouseScope } = require('../middlewares/auth_middleware');
 
 router.use(authenticateToken);
-router.use(authorizeRoles('admin', 'manager', 'super_admin', 'superadmin', 'salesman', 'warehouse_manager'));
+router.use(authorizeRoles('admin', 'manager', 'super_admin', 'superadmin', 'salesman', 'warehouse_manager', 'cashier'));
 router.use(enforceWarehouseScope);
 
 // 1. Existing Report & Legacy Adjustments
@@ -72,9 +72,14 @@ router.post('/purchases/grns', authorizeRoles('admin', 'manager', 'super_admin',
 router.post('/purchases/grns/:id/convert-to-bill', authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), InventoryController.convertGRNToBill);
 
 // 9. Purchases — Purchase Bills
+router.get('/purchases/bills/next-number', requirePermission('purchases'), InventoryController.getNextPurchaseBillNumber);
+router.get('/purchase-bills/next-number', requirePermission('purchases'), InventoryController.getNextPurchaseBillNumber);
 router.get('/purchases/bills', requirePermission('purchases'), InventoryController.getPurchaseBills);
 router.get('/purchases/bills/:id', requirePermission('purchases'), InventoryController.getPurchaseBillById);
+router.get('/purchases/bills/:id/pdf', requirePermission('purchases'), InventoryController.downloadPurchaseBillPDF);
+router.post('/purchases/bills/:id/email', requirePermission('purchases'), InventoryController.emailPurchaseBill);
 router.post('/purchases/bills', authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), InventoryController.createPurchaseBill);
+
 
 // 10. Purchases — Purchase Returns
 router.get('/purchases/returns', requirePermission('purchases'), InventoryController.getPurchaseReturns);

@@ -101,7 +101,7 @@ router.post('/test-print', authenticateToken, authorizeRoles('admin', 'manager',
 
       const payload = type === 'KOT'
         ? PrinterService.buildKOTPayload(sampleOrder, sampleItems, printer, receiptSettings)
-        : PrinterService.buildReceiptPayload(sampleOrder, sampleItems, restaurant, printer, receiptSettings);
+        : await PrinterService.buildReceiptPayload(sampleOrder, sampleItems, restaurant, printer, receiptSettings);
 
       const targetIp = printer.ip_address || '127.0.0.1';
       const targetPort = printer.port || 9100;

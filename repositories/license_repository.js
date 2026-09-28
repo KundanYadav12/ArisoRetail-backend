@@ -43,15 +43,25 @@ class LicenseRepository {
     let sql = `
       SELECT l.*,
              d.name as distributor_name,
-             r.name as store_name,
+             COALESCE(r.name, lrh.account_name) as store_name,
              r.subscription_expires_at,
-             r.owner_name,
-             r.owner_email,
-             r.owner_mobile,
-             r.created_at as subscription_start_date
+             COALESCE(r.owner_name, lrh.person_name) as owner_name,
+             COALESCE(r.owner_email, lrh.email) as owner_email,
+             COALESCE(r.owner_mobile, lrh.phone) as owner_mobile,
+             COALESCE(r.created_at, lrh.registered_at) as subscription_start_date,
+             COALESCE(lrh.registration_status, IF(l.status = 'activated', 'Active', IF(l.status = 'inactive', 'Inactive', 'None'))) as registration_status
       FROM licenses l
       JOIN distributors d ON l.distributor_id = d.id
       LEFT JOIN restaurants r ON l.restaurant_id = r.id
+      LEFT JOIN (
+        SELECT h1.*
+        FROM license_registration_history h1
+        INNER JOIN (
+          SELECT license_id, MAX(id) as max_id
+          FROM license_registration_history
+          GROUP BY license_id
+        ) h2 ON h1.id = h2.max_id
+      ) lrh ON l.id = lrh.license_id
     `;
     const params = [];
     if (distributorId) {
@@ -60,6 +70,22 @@ class LicenseRepository {
     }
     sql += ' ORDER BY l.id DESC';
 
+    const [rows] = await pool.execute(sql, params);
+    return rows;
+  }
+
+  static async getLicenseRegistrationHistory(licenseId = null, email = null) {
+    let sql = 'SELECT * FROM license_registration_history WHERE 1=1';
+    const params = [];
+    if (licenseId) {
+      sql += ' AND (license_id = ? OR license_code = ?)';
+      params.push(licenseId, String(licenseId));
+    }
+    if (email) {
+      sql += ' AND LOWER(email) = ?';
+      params.push(String(email).toLowerCase().trim());
+    }
+    sql += ' ORDER BY id DESC';
     const [rows] = await pool.execute(sql, params);
     return rows;
   }
@@ -128,7 +154,11 @@ class LicenseRepository {
 
   static async findAvailableLicense(licenseCode) {
     const [rows] = await pool.execute(
-      'SELECT * FROM licenses WHERE license_code = ? AND status = "available" LIMIT 1',
+      `SELECT l.*, d.name as distributor_name 
+       FROM licenses l 
+       LEFT JOIN distributors d ON l.distributor_id = d.id 
+       WHERE l.license_code = ? AND l.status = "available" 
+       LIMIT 1`,
       [licenseCode]
     );
     return rows[0] || null;
@@ -168,6 +198,20 @@ class LicenseRepository {
       await connection.execute(
         'UPDATE licenses SET status = "activated", activated_at = NOW(), restaurant_id = ? WHERE id = ?',
         [newRestaurantId, license.id]
+      );
+
+      // 3b. Maintain License Registration History
+      // Inactivate any previous active registrations for this email
+      const cleanEmail = email.toLowerCase().trim();
+      await connection.execute(
+        'UPDATE license_registration_history SET registration_status = "Inactive", unregistered_at = NOW() WHERE LOWER(email) = ? AND registration_status = "Active"',
+        [cleanEmail]
+      );
+
+      // Record new active registration
+      await connection.execute(
+        'INSERT INTO license_registration_history (license_id, license_code, account_name, person_name, email, phone, registration_status, registered_at) VALUES (?, ?, ?, ?, ?, ?, "Active", NOW())',
+        [license.id, licenseCode, storeName, ownerName, cleanEmail, phone || null]
       );
 
       // 4. Log Subscription History (Charge history)

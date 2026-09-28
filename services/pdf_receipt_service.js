@@ -203,9 +203,14 @@ class PdfReceiptService {
           if (order.tax_type === 'inter') {
             drawTotalLine('IGST:', `Rs. ${tax}`);
           } else {
-            const halfTax = (parseFloat(tax) / 2).toFixed(2);
-            drawTotalLine('CGST:', `Rs. ${halfTax}`);
-            drawTotalLine('SGST:', `Rs. ${halfTax}`);
+            const cgstVal = order.cgst_amount !== undefined && order.cgst_amount !== null
+              ? parseFloat(order.cgst_amount).toFixed(2)
+              : (parseFloat(tax) / 2).toFixed(2);
+            const sgstVal = order.sgst_amount !== undefined && order.sgst_amount !== null
+              ? parseFloat(order.sgst_amount).toFixed(2)
+              : (parseFloat(tax) / 2).toFixed(2);
+            drawTotalLine('CGST:', `Rs. ${cgstVal}`);
+            drawTotalLine('SGST:', `Rs. ${sgstVal}`);
           }
         }
         if (order.round_off && parseFloat(order.round_off) !== 0) {

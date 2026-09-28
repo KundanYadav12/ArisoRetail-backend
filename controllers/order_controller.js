@@ -25,7 +25,7 @@ class OrderController {
       customer_id, customer_name, customer_phone, customer_address, store_name, salesman_id, salesman_name,
       print_actions, idempotency_key, offline_id, tax_type,
       delivery_date, billing_address, shipping_address, place_of_supply, price_list, reference_number,
-      additional_charges, is_sales_order, kitchen_status
+      additional_charges, is_sales_order, is_estimate, document_type, kitchen_status
     } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -55,6 +55,9 @@ class OrderController {
       const isSalesUser = ['salesman', 'admin', 'manager'].includes(req.user.role);
       const effectiveSalesmanId = isSalesUser ? (salesman_id || req.user.id) : (salesman_id || null);
       const effectiveSalesmanName = isSalesUser ? (salesman_name || req.user.name) : (salesman_name || null);
+
+      const isEstimateFlag = (is_estimate === 1 || is_estimate === true || is_estimate === '1' || document_type === 'estimate') ? 1 : 0;
+      const isSalesOrderFlag = isEstimateFlag ? 0 : (is_sales_order ? 1 : 0);
 
       // Consolidate order insert parameters
       const orderData = {
@@ -88,14 +91,16 @@ class OrderController {
         price_list: price_list || 'standard',
         reference_number: reference_number || null,
         additional_charges: additional_charges || null,
-        is_sales_order: is_sales_order ? 1 : 0,
+        is_sales_order: isSalesOrderFlag,
+        is_estimate: isEstimateFlag,
         paid_amount: req.body.paid_amount !== undefined ? req.body.paid_amount : undefined,
         payment_status: req.body.payment_status || undefined,
         due_date: req.body.due_date || null,
         credit_days: req.body.credit_days !== undefined ? req.body.credit_days : undefined,
         down_payment_mode: req.body.down_payment_mode || undefined,
         advance_amount: req.body.advance_amount !== undefined ? req.body.advance_amount : 0,
-        payment_details: payment_details || null
+        payment_details: payment_details || null,
+        warehouse_id: req.user.assigned_warehouse_id || req.body.warehouse_id || null
       };
 
       const createdOrder = await OrderRepository.create(restaurantId, orderData, sanitizedItems, safeIdempotencyKey);
@@ -110,7 +115,7 @@ class OrderController {
 
       // Return immediately
       return res.status(201).json({
-        message: 'Order placed successfully.',
+        message: isEstimateFlag ? 'Estimate saved successfully.' : 'Order placed successfully.',
         orderNumber: orderNumber,
         orderId: orderId,
         order: createdOrder.order || createdOrder
@@ -124,11 +129,21 @@ class OrderController {
   static async getAll(req, res) {
     try {
       const restaurantId = req.user.restaurant_id;
+      const isEstQuery = req.query.is_estimate !== undefined
+        ? req.query.is_estimate
+        : (req.query.status === 'estimate' || req.query.order_status === 'estimate' ? 1 : undefined);
+
+      const statusQuery = (req.query.status === 'estimate' || req.query.order_status === 'estimate')
+        ? undefined
+        : (req.query.order_status || req.query.status);
+
       const filters = {
         cashier_id: req.query.cashier_id,
         salesman_id: req.query.salesman_id,
-        order_status: req.query.order_status || req.query.status,
+        order_status: statusQuery,
         is_sales_order: req.query.is_sales_order,
+        is_estimate: isEstQuery,
+        warehouse_id: req.user.assigned_warehouse_id || req.query.warehouse_id,
         date_from: req.query.date_from,
         date_to: req.query.date_to,
         search: req.query.search,
@@ -471,6 +486,12 @@ class OrderController {
         }
       }
 
+      if (req.user.assigned_warehouse_id) {
+        filters.warehouse_id = req.user.assigned_warehouse_id;
+      } else if (req.query.warehouse_id && req.query.warehouse_id !== 'all') {
+        filters.warehouse_id = req.query.warehouse_id;
+      }
+
       const result = await OrderRepository.getHistory(restaurantId, filters);
       return res.json(result);
     } catch (err) {
@@ -659,7 +680,8 @@ class OrderController {
         items, subtotal, tax_amount, discount_amount, total_amount, 
         customer_id, customer_name, customer_phone, notes, 
         delivery_date, billing_address, shipping_address, place_of_supply, 
-        price_list, reference_number, additional_charges 
+        price_list, reference_number, additional_charges,
+        is_sales_order, is_estimate
       } = req.body;
 
       const orderData = {
@@ -677,7 +699,9 @@ class OrderController {
         place_of_supply,
         price_list,
         reference_number,
-        additional_charges
+        additional_charges,
+        ...(is_sales_order !== undefined ? { is_sales_order: is_sales_order ? 1 : 0 } : {}),
+        ...(is_estimate !== undefined ? { is_estimate: (is_estimate === 1 || is_estimate === true || is_estimate === '1') ? 1 : 0 } : {})
       };
 
       const result = await OrderRepository.updateSalesOrder(orderId, restaurantId, orderData, items);

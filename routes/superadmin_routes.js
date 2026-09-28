@@ -16,6 +16,7 @@ router.post('/restaurants/:id/renew', SuperAdminController.renewSubscription);
 router.put('/restaurants/:id/status', SuperAdminController.toggleStatus);
 router.patch('/restaurants/:id/toggle-superbill', SuperAdminController.toggleSuperBill);
 router.patch('/restaurants/:id/toggle-barcode-scanner', SuperAdminController.toggleBarcodeScanner);
+router.patch('/restaurants/:id/toggle-serial-numbers', SuperAdminController.toggleSerialNumbers);
 router.get('/plans', SuperAdminController.getSubscriptionPlans);
 router.get('/logs', SuperAdminController.getLogs);
 
@@ -27,6 +28,7 @@ router.delete('/distributors/:id', SuperAdminController.deleteDistributor);
 
 // License Management Routes
 router.get('/licenses', SuperAdminController.getLicenses);
+router.get('/license-history', SuperAdminController.getLicenseHistory);
 router.post('/licenses/generate', SuperAdminController.generateLicenses);
 router.put('/licenses/:id', SuperAdminController.updateLicense);
 router.get('/distributors/:id/export-licenses', SuperAdminController.exportDistributorLicenses);

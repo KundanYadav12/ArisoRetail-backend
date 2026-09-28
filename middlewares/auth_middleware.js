@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { JWT_SECRET } = require('../config/jwt_config');
-const { DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS } = require('../config/permissions_config');
+const { DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } = require('../config/permissions_config');
 
 /**
  * Main authentication middleware
@@ -22,7 +22,7 @@ async function authenticateToken(req, res, next) {
     
     // Fetch user details to verify state
     const [rows] = await pool.execute(
-      'SELECT u.id, u.restaurant_id, u.name, u.username, u.role, u.assigned_warehouse_id, u.permissions, u.is_active, u.active_session_id, r.subscription_status, r.subscription_expires_at, r.name as restaurant_name ' +
+      'SELECT u.id, u.restaurant_id, u.name, u.username, u.role, u.assigned_warehouse_id, u.permissions, u.is_active, u.active_session_id, r.subscription_status, r.subscription_expires_at, r.name as restaurant_name, r.feature_serial_numbers ' +
       'FROM users u LEFT JOIN restaurants r ON u.restaurant_id = r.id ' +
       'WHERE u.id = ? AND u.is_active = 1',
       [decoded.id]
@@ -72,8 +72,8 @@ async function authenticateToken(req, res, next) {
       } catch {
         parsedPermissions = [];
       }
-    } else if (userRole === 'warehouse_manager') {
-      parsedPermissions = DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS;
+    } else {
+      parsedPermissions = ROLE_DEFAULT_PERMISSIONS[userRole] || (userRole === 'warehouse_manager' ? DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS : []);
     }
 
     // Attach user information to request
@@ -86,6 +86,7 @@ async function authenticateToken(req, res, next) {
       role: user.role,
       assigned_warehouse_id: user.assigned_warehouse_id || null,
       permissions: Array.isArray(parsedPermissions) ? parsedPermissions : [],
+      feature_serial_numbers: user.feature_serial_numbers !== undefined ? Boolean(user.feature_serial_numbers) : true,
       shift_id: decoded.shift_id
     };
 
@@ -153,7 +154,7 @@ function authorizeRoles(...allowedRoles) {
 /**
  * Granular Permission checking middleware
  * Checks if current user possesses the required permission.
- * Admins, owners, and superadmins are granted full access.
+ * Superadmins and unrestricted admins are granted full access.
  */
 function requirePermission(permissionKey) {
   return (req, res, next) => {
@@ -162,28 +163,53 @@ function requirePermission(permissionKey) {
     }
 
     const role = (req.user.role || '').toLowerCase();
-    // Admin, owner, super_admin bypass granular sub-checks
-    if (['admin', 'owner', 'super_admin', 'superadmin'].includes(role)) {
+    // Super admin always bypasses granular sub-checks
+    if (['super_admin', 'superadmin'].includes(role)) {
       return next();
     }
 
-    if (role === 'warehouse_manager') {
-      const permissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
-      if (permissions.includes(permissionKey) || permissions.includes('all')) {
-        return next();
-      }
-
-      return res.status(403).json({
-        error: `Access Denied: Missing permission '${permissionKey}'. Contact your Administrator.`
-      });
+    // Unrestricted admin / owner bypass if permissions array is not restricting them
+    if (['admin', 'owner'].includes(role) && (!req.user.permissions || req.user.permissions.length === 0)) {
+      return next();
     }
 
-    next();
+    const permissions = Array.isArray(req.user.permissions) && req.user.permissions.length > 0
+      ? req.user.permissions
+      : (ROLE_DEFAULT_PERMISSIONS[role] || []);
+
+    // User possesses 'all' wildcard permission or the exact permissionKey
+    if (permissions.includes('all') || permissions.includes(permissionKey)) {
+      return next();
+    }
+
+    // Umbrella / Alias permissions:
+    if (permissionKey === 'inventory_catalog' && permissions.includes('inventory')) {
+      return next();
+    }
+    if (permissionKey === 'inventory' && permissions.includes('inventory_catalog')) {
+      return next();
+    }
+    if (permissionKey === 'warehouse_reports' && permissions.includes('item_sales_report')) {
+      return next();
+    }
+    if (permissionKey === 'item_sales_report' && permissions.includes('warehouse_reports')) {
+      return next();
+    }
+    if (permissionKey === 'bank_accounts' && permissions.includes('finance_accounts')) {
+      return next();
+    }
+    if (permissionKey === 'finance_accounts' && permissions.includes('bank_accounts')) {
+      return next();
+    }
+
+    return res.status(403).json({
+      error: `Access Denied: Missing permission '${permissionKey}'. Contact your Administrator.`
+    });
   };
 }
 
 /**
- * Enforces warehouse isolation for warehouse_manager roles
+ * Enforces warehouse isolation for any user with assigned_warehouse_id
  */
 function enforceWarehouseScope(req, res, next) {
   if (!req.user) {
@@ -191,15 +217,19 @@ function enforceWarehouseScope(req, res, next) {
   }
 
   const role = (req.user.role || '').toLowerCase();
-  if (role === 'warehouse_manager' && req.user.assigned_warehouse_id) {
+  if (['super_admin', 'superadmin'].includes(role)) {
+    return next();
+  }
+
+  if (req.user.assigned_warehouse_id) {
     const assignedWhId = parseInt(req.user.assigned_warehouse_id, 10);
 
     // If request explicitly targets a different warehouse, reject it
     if (req.body && req.body.warehouse_id && parseInt(req.body.warehouse_id, 10) !== assignedWhId) {
-      return res.status(403).json({ error: 'Access denied: Warehouse Manager is restricted to their assigned warehouse.' });
+      return res.status(403).json({ error: 'Access denied: User is restricted to their assigned warehouse / store.' });
     }
     if (req.query && req.query.warehouse_id && req.query.warehouse_id !== 'all' && parseInt(req.query.warehouse_id, 10) !== assignedWhId) {
-      return res.status(403).json({ error: 'Access denied: Warehouse Manager is restricted to their assigned warehouse.' });
+      return res.status(403).json({ error: 'Access denied: User is restricted to their assigned warehouse / store.' });
     }
 
     // Transfers: Ensure at least one side is the assigned warehouse
@@ -222,11 +252,47 @@ function enforceWarehouseScope(req, res, next) {
   next();
 }
 
+/**
+ * Super Admin Permission middleware
+ * Only superadmin role OR accounts explicitly granted this specific permission can access.
+ */
+function requireSuperAdminOrPermission(permissionKey = 'serial_numbers') {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthenticated.' });
+    }
+
+    const role = (req.user.role || '').toLowerCase();
+    // Super admin role always has access
+    if (['super_admin', 'superadmin'].includes(role)) {
+      return next();
+    }
+
+    // Check store-level feature permission if key is serial_numbers
+    if (permissionKey === 'serial_numbers' && req.user.feature_serial_numbers === false) {
+      return res.status(403).json({
+        error: "Access Denied: Product Serial Number Tracking is disabled for this store by Super Administrator."
+      });
+    }
+
+    // Explicitly granted permission by Super Admin / Tenant Admin
+    const permissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
+    if (role === 'admin' || permissions.includes(permissionKey) || permissions.includes('all')) {
+      return next();
+    }
+
+    return res.status(403).json({
+      error: `Access Denied: Product Serial Number Tracking is restricted by Super Admin permission ('${permissionKey}'). Contact your Super Administrator.`
+    });
+  };
+}
+
 module.exports = {
   authenticateToken,
   optionalAuthenticateToken,
   authorizeRoles,
   requirePermission,
+  requireSuperAdminOrPermission,
   enforceWarehouseScope
 };
 

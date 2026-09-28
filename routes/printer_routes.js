@@ -5,16 +5,18 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
-// All logged in staff can see the printer mapping
+// All logged in staff can see the printer mapping, discover LAN printers, and run test prints
 router.get('/', PrinterController.getAll);
+router.get('/discover', PrinterController.discoverPrinters);
+router.post('/auto-detect', PrinterController.discoverPrinters);
+router.post('/test', PrinterController.testConnection);
+router.post('/print-receipt', PrinterController.printReceipt);
 router.get('/:id', PrinterController.getById);
 
-// Only administrators can edit/create/delete network printer profiles or trigger manual tests
+// Only administrators can edit/create/delete network printer profiles
 router.post('/', authorizeRoles('admin'), PrinterController.create);
 router.put('/:id', authorizeRoles('admin'), PrinterController.update);
 router.put('/:id/status', authorizeRoles('admin'), PrinterController.updateStatus);
 router.delete('/:id', authorizeRoles('admin'), PrinterController.delete);
-router.post('/test', authorizeRoles('admin'), PrinterController.testConnection);
-router.post('/print-receipt', PrinterController.printReceipt);
 
 module.exports = router;

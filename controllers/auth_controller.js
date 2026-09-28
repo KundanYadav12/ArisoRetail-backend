@@ -7,7 +7,7 @@ const SuperAdminRepository = require('../repositories/superadmin_repository');
 const OTPService = require('../services/otp_service');
 
 const { JWT_SECRET, JWT_REFRESH_SECRET, JWT_EXPIRY, JWT_REFRESH_EXPIRY } = require('../config/jwt_config');
-const { DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS, ALL_SYSTEM_PERMISSIONS } = require('../config/permissions_config');
+const { DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS, ALL_SYSTEM_PERMISSIONS } = require('../config/permissions_config');
 
 class AuthController {
   static async login(req, res) {
@@ -74,7 +74,7 @@ class AuthController {
 
       let restInfo = {};
       const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, barcode_scanner_enabled FROM restaurants WHERE id = ?', [targetRestId]);
+      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, barcode_scanner_enabled, feature_serial_numbers FROM restaurants WHERE id = ?', [targetRestId]);
       if (rRows.length > 0) restInfo = rRows[0];
 
       let whName = null;
@@ -109,6 +109,7 @@ class AuthController {
           restaurant_logo_url: restInfo.logo_url || null,
           feature_superbill: Boolean(restInfo.feature_superbill),
           barcode_scanner_enabled: Boolean(restInfo.barcode_scanner_enabled),
+          feature_serial_numbers: restInfo.feature_serial_numbers !== undefined ? Boolean(restInfo.feature_serial_numbers) : true,
           shift_id: activeShiftId,
           must_change_password: Boolean(user.must_change_password),
           is_verified: Boolean(user.is_verified),
@@ -163,6 +164,7 @@ class AuthController {
         shift_id: req.user.shift_id || null,
         feature_superbill: restaurant ? Boolean(restaurant.feature_superbill) : false,
         barcode_scanner_enabled: restaurant ? Boolean(restaurant.barcode_scanner_enabled) : false,
+        feature_serial_numbers: restaurant ? (restaurant.feature_serial_numbers !== undefined ? Boolean(restaurant.feature_serial_numbers) : true) : true,
         assigned_warehouse_id: user.assigned_warehouse_id || null,
         assigned_warehouse_name: user.assigned_warehouse_name || null,
         permissions: Array.isArray(userPerms) ? userPerms : []
@@ -364,10 +366,8 @@ class AuthController {
 
       // 3. Resolve permissions
       let finalPermissions = permissions;
-      if (role === 'warehouse_manager') {
-        if (!finalPermissions || !Array.isArray(finalPermissions) || finalPermissions.length === 0) {
-          finalPermissions = DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS;
-        }
+      if (!finalPermissions || !Array.isArray(finalPermissions) || finalPermissions.length === 0) {
+        finalPermissions = ROLE_DEFAULT_PERMISSIONS[role] || (role === 'warehouse_manager' ? DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS : null);
       }
 
       // 4. Hash password & create staff
@@ -551,7 +551,7 @@ class AuthController {
 
       let restInfo = {};
       const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill FROM restaurants WHERE id = ?', [targetRestId]);
+      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, feature_serial_numbers FROM restaurants WHERE id = ?', [targetRestId]);
       if (rRows.length > 0) restInfo = rRows[0];
 
       return res.json({
@@ -567,6 +567,7 @@ class AuthController {
           restaurant_name: restInfo.name || user.name || 'Ariso Retail Store',
           restaurant_logo_url: restInfo.logo_url || null,
           feature_superbill: Boolean(restInfo.feature_superbill),
+          feature_serial_numbers: restInfo.feature_serial_numbers !== undefined ? Boolean(restInfo.feature_serial_numbers) : true,
           shift_id: activeShiftId,
           assigned_warehouse_id: user.assigned_warehouse_id || null,
           permissions: (() => {
@@ -641,11 +642,11 @@ class AuthController {
   }
 
   static async verifyLicense(req, res) {
-    const { license_id } = req.query;
-    if (!license_id) {
-      return res.status(400).json({ error: 'License ID query parameter is required.' });
+    const rawId = req.query.license_id || req.body?.license_id || req.query.license || req.body?.license;
+    if (!rawId) {
+      return res.status(400).json({ error: 'License ID parameter is required.' });
     }
-    const clean = license_id.trim();
+    const clean = String(rawId).trim();
     if (!/^\d{12}$/.test(clean)) {
       return res.status(400).json({ error: 'License ID must be exactly 12 numeric digits.' });
     }
@@ -655,26 +656,39 @@ class AuthController {
       if (!license) {
         return res.status(404).json({ error: 'License key is invalid, expired, or already in use.' });
       }
-      return res.json({ valid: true, license_id: clean });
+      return res.json({
+        valid: true,
+        license_id: clean,
+        distributor_id: license.distributor_id,
+        distributor_name: license.distributor_name || 'Authorized Distributor',
+        current_year_pricing: license.current_year_pricing,
+        next_year_pricing: license.next_year_pricing,
+        subscription_period_years: license.subscription_period_years || 1
+      });
     } catch (err) {
-      console.error(err);
+      console.error('[AuthController.verifyLicense Error]', err);
       return res.status(500).json({ error: 'Failed to verify license key.' });
     }
   }
 
   static async registerWithLicense(req, res) {
-    const { license_id, store_name, owner_name, email, phone, password } = req.body;
+    const rawLicense = req.body.license_id || req.body.license;
+    const storeName = req.body.store_name || req.body.restaurant_name;
+    const ownerName = req.body.owner_name;
+    const email = req.body.email;
+    const phone = req.body.phone;
+    const password = req.body.password;
 
-    if (!license_id || !store_name || !owner_name || !email || !password) {
+    if (!rawLicense || !storeName || !ownerName || !email || !password) {
       return res.status(400).json({ error: 'License ID, Store Name, Owner Name, Email, and Password are required.' });
     }
 
-    const cleanLicense = license_id.trim();
+    const cleanLicense = String(rawLicense).trim();
     if (!/^\d{12}$/.test(cleanLicense)) {
       return res.status(400).json({ error: 'License ID must be exactly 12 numeric digits.' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail = String(email).trim().toLowerCase();
 
     try {
       const LicenseRepository = require('../repositories/license_repository');
@@ -700,10 +714,10 @@ class AuthController {
       // 4. Perform atomic transaction registration
       const result = await LicenseRepository.registerStoreWithLicense({
         licenseCode: cleanLicense,
-        storeName: store_name.trim(),
-        ownerName: owner_name.trim(),
+        storeName: String(storeName).trim(),
+        ownerName: String(ownerName).trim(),
         email: cleanEmail,
-        phone: phone ? phone.trim() : null,
+        phone: phone ? String(phone).trim() : null,
         passwordHash
       });
 
@@ -714,16 +728,42 @@ class AuthController {
         `Store '${result.storeName}' successfully registered and activated using 12-digit License key: ${cleanLicense}`,
         req.ip,
         {
-          user_name: owner_name,
+          user_name: ownerName,
           user_role: 'admin',
-          new_name: store_name
+          new_name: storeName
         }
       );
+
+      // Generate JWT Access & Refresh Tokens so user can immediately login or continue
+      const token = jwt.sign(
+        { id: result.userId, restaurant_id: result.restaurantId, role: 'admin', permissions: ['all'] },
+        JWT_SECRET,
+        { expiresIn: JWT_EXPIRY }
+      );
+      const refreshToken = jwt.sign(
+        { id: result.userId, session_id: null },
+        JWT_REFRESH_SECRET,
+        { expiresIn: JWT_REFRESH_EXPIRY }
+      );
+
+      const userObject = {
+        id: result.userId,
+        restaurant_id: result.restaurantId,
+        name: String(ownerName).trim(),
+        username: cleanEmail,
+        email: cleanEmail,
+        role: 'admin',
+        restaurant_name: String(storeName).trim()
+      };
 
       return res.status(201).json({
         message: 'Store registered and activated successfully. You can now log in.',
         restaurant_id: result.restaurantId,
-        email: result.email
+        email: result.email,
+        token,
+        accessToken: token,
+        refreshToken,
+        user: userObject
       });
 
     } catch (err) {

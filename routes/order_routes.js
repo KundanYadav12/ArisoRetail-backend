@@ -1,9 +1,10 @@
 const express = require('express');
 const OrderController = require('../controllers/order_controller');
-const { authenticateToken, authorizeRoles, requirePermission } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, requirePermission, enforceWarehouseScope } = require('../middlewares/auth_middleware');
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(enforceWarehouseScope);
 
 // Staff members can place active ticket orders
 router.post('/', authorizeRoles('cashier', 'salesman', 'admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('pos_billing'), OrderController.create);

@@ -265,7 +265,12 @@ class GstController {
   static async getCreditNotes(req, res) {
     try {
       const restaurantId = req.user.restaurant_id;
-      const notes = await CreditNoteRepository.getAll(restaurantId, req.query);
+      const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
+      const notes = await CreditNoteRepository.getAll(restaurantId, {
+        ...req.query,
+        date_from: dateFrom.slice(0, 10),
+        date_to: dateTo.slice(0, 10)
+      });
       return res.json(notes);
     } catch (err) {
       console.error('[GST Controller Get Credit Notes Error]:', err);
@@ -497,6 +502,116 @@ class GstController {
     } catch (err) {
       console.error('[GST Controller GSTR-2 Excel Error]:', err);
       return res.status(500).json({ error: 'Failed to generate GSTR-2 Excel export.' });
+    }
+  }
+
+  /**
+   * GSTR-3B Monthly Return Summary Data
+   */
+  static async getGstr3b(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
+      const report = await ReportRepository.getGstr3bReport(restaurantId, dateFrom, dateTo);
+      return res.json({
+        success: true,
+        report,
+        dateFrom,
+        dateTo
+      });
+    } catch (err) {
+      console.error('[GST Controller GSTR-3B Error]:', err);
+      return res.status(500).json({ error: 'Failed to retrieve GSTR-3B report: ' + err.message });
+    }
+  }
+
+  /**
+   * Export GSTR-3B Excel (.xlsx)
+   */
+  static async exportGstr3bExcel(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
+      const report = await ReportRepository.getGstr3bReport(restaurantId, dateFrom, dateTo);
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Ariso Retail GST Compliance';
+
+      // Sheet 1: Table 3.1 Outward Supplies
+      const ws31 = workbook.addWorksheet('Table 3.1 Outward Supplies');
+      ws31.columns = [
+        { header: 'Nature of Supplies', key: 'nature', width: 45 },
+        { header: 'Total Taxable Value (₹)', key: 'taxable_value', width: 22 },
+        { header: 'Integrated Tax (₹)', key: 'igst', width: 18 },
+        { header: 'Central Tax (₹)', key: 'cgst', width: 18 },
+        { header: 'State/UT Tax (₹)', key: 'sgst', width: 18 },
+        { header: 'Cess (₹)', key: 'cess', width: 12 }
+      ];
+      ws31.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
+      ws31.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
+      
+      const t31 = report.table3_1;
+      [t31.outward_taxable, t31.zero_rated, t31.nil_exempt, t31.reverse_charge, t31.non_gst].forEach(row => ws31.addRow(row));
+      const totalRow = ws31.addRow({
+        nature: 'Total Outward Supplies',
+        taxable_value: t31.total.taxable_value,
+        igst: t31.total.igst,
+        cgst: t31.total.cgst,
+        sgst: t31.total.sgst,
+        cess: 0
+      });
+      totalRow.font = { bold: true };
+
+      // Sheet 2: Table 4 Eligible ITC
+      const ws4 = workbook.addWorksheet('Table 4 Eligible ITC');
+      ws4.columns = [
+        { header: 'Details', key: 'nature', width: 45 },
+        { header: 'Integrated Tax (₹)', key: 'igst', width: 18 },
+        { header: 'Central Tax (₹)', key: 'cgst', width: 18 },
+        { header: 'State/UT Tax (₹)', key: 'sgst', width: 18 },
+        { header: 'Cess (₹)', key: 'cess', width: 12 }
+      ];
+      ws4.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
+      ws4.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
+      
+      ws4.addRow({ nature: '(A) ITC Available (whether in full or part)' }).font = { bold: true, color: { argb: '0369A1' } };
+      const itcAvail = report.table4_itc.itc_available;
+      [itcAvail.import_goods, itcAvail.import_services, itcAvail.reverse_charge, itcAvail.isd, itcAvail.all_other].forEach(r => ws4.addRow(r));
+
+      ws4.addRow({ nature: '(B) ITC Reversed' }).font = { bold: true, color: { argb: 'DC2626' } };
+      const itcRev = report.table4_itc.itc_reversed;
+      [itcRev.rule_reversal, itcRev.others].forEach(r => ws4.addRow(r));
+
+      const netItcRow = ws4.addRow(report.table4_itc.net_itc);
+      netItcRow.font = { bold: true, color: { argb: '15803D' } };
+
+      // Sheet 3: Table 5.1 Payment of Tax
+      const ws5 = workbook.addWorksheet('Table 5.1 Tax Payment');
+      ws5.columns = [
+        { header: 'Description', key: 'desc', width: 20 },
+        { header: 'Tax Payable (₹)', key: 'tax_payable', width: 18 },
+        { header: 'Paid Through ITC (₹)', key: 'itc_paid', width: 20 },
+        { header: 'Tax Paid in Cash (₹)', key: 'cash_paid', width: 20 },
+        { header: 'Interest (₹)', key: 'interest', width: 14 },
+        { header: 'Late Fee (₹)', key: 'late_fee', width: 14 }
+      ];
+      ws5.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
+      ws5.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
+
+      const t5 = report.table5_payment;
+      ws5.addRow({ desc: 'Integrated Tax', ...t5.igst });
+      ws5.addRow({ desc: 'Central Tax', ...t5.cgst });
+      ws5.addRow({ desc: 'State/UT Tax', ...t5.sgst });
+      const payTotalRow = ws5.addRow({ desc: 'Total', ...t5.total });
+      payTotalRow.font = { bold: true };
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=GSTR3B_Summary_${dateFrom.slice(0, 10)}_to_${dateTo.slice(0, 10)}.xlsx`);
+      return res.send(buffer);
+    } catch (err) {
+      console.error('[GST Controller GSTR-3B Excel Error]:', err);
+      return res.status(500).json({ error: 'Failed to generate GSTR-3B Excel export.' });
     }
   }
 }

@@ -62,7 +62,8 @@ class SuperAdminController {
         max_user_limit: max_user_limit || 5,
         max_manager_limit: max_manager_limit || 2,
         max_cashier_limit: max_cashier_limit || 3,
-        subscription_status: 'active'
+        subscription_status: 'active',
+        feature_serial_numbers: req.body.feature_serial_numbers !== undefined ? req.body.feature_serial_numbers : 1
       });
 
       // 2. Provision Owner User Account in Pending Activation State (unless password is explicitly specified)
@@ -119,7 +120,8 @@ class SuperAdminController {
     const {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-      subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled
+      subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
+      feature_serial_numbers
     } = req.body;
     const restaurantId = req.params.id;
 
@@ -131,7 +133,8 @@ class SuperAdminController {
       const success = await SuperAdminRepository.updateRestaurant(restaurantId, {
         name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
         gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-        subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled
+        subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
+        feature_serial_numbers
       });
 
       if (!success) {
@@ -241,6 +244,24 @@ class SuperAdminController {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to toggle barcode scanner module.' });
+    }
+  }
+
+  static async toggleSerialNumbers(req, res) {
+    const { enabled } = req.body;
+    const restaurantId = req.params.id;
+
+    try {
+      const success = await SuperAdminRepository.toggleSerialNumbersPermission(restaurantId, enabled);
+      if (!success) {
+        return res.status(404).json({ error: 'Restaurant not found.' });
+      }
+
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'TOGGLE_SERIAL_NUMBERS', `SuperAdmin toggled Serial Numbers module to ${enabled ? 'ENABLED' : 'DISABLED'} for Restaurant ID ${restaurantId}`, req.ip);
+      return res.json({ message: `Serial Numbers feature permission ${enabled ? 'enabled' : 'disabled'} for store successfully.`, feature_serial_numbers: enabled ? 1 : 0 });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to toggle Serial Numbers feature permission.' });
     }
   }
 
@@ -428,6 +449,18 @@ class SuperAdminController {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to retrieve licenses.' });
+    }
+  }
+
+  static async getLicenseHistory(req, res) {
+    const { license_id, email } = req.query;
+    try {
+      const LicenseRepository = require('../repositories/license_repository');
+      const history = await LicenseRepository.getLicenseRegistrationHistory(license_id, email);
+      return res.json(history);
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to retrieve license registration history.' });
     }
   }
 

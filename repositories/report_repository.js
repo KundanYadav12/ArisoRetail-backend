@@ -329,6 +329,8 @@ class ReportRepository {
         AND created_at >= ?
         AND created_at <= ?
         AND order_status = 'completed'
+        AND (is_estimate = 0 OR is_estimate IS NULL)
+        AND (is_sales_order = 0 OR is_sales_order IS NULL OR (is_sales_order = 1 AND NOT EXISTS (SELECT 1 FROM orders ch WHERE ch.parent_order_id = orders.id AND ch.order_status = 'completed')))
     `, [restaurantId, dateFrom, dateTo]);
 
     // 2. Sales Returns / Credit Notes (Output GST Reversal)
@@ -411,6 +413,8 @@ class ReportRepository {
         AND o.created_at >= ?
         AND o.created_at <= ?
         AND o.order_status = 'completed'
+        AND (o.is_estimate = 0 OR o.is_estimate IS NULL)
+        AND (o.is_sales_order = 0 OR o.is_sales_order IS NULL OR (o.is_sales_order = 1 AND NOT EXISTS (SELECT 1 FROM orders ch WHERE ch.parent_order_id = o.id AND ch.order_status = 'completed')))
       GROUP BY oi.gst_rate
       ORDER BY oi.gst_rate ASC
     `, [restaurantId, dateFrom, dateTo]);
@@ -473,6 +477,14 @@ class ReportRepository {
         grossPurchases: parseFloat(purchases.gross_purchases || 0)
       },
       inputTaxCredit: {
+        totalItc: parseFloat(purchases.total_input_tax || 0),
+        totalTaxableAmount: parseFloat(purchases.taxable_purchases || 0),
+        totalBills: parseInt(purchases.total_purchase_bills || 0),
+        cgst: parseFloat(purchases.input_cgst || 0),
+        sgst: parseFloat(purchases.input_sgst || 0),
+        igst: parseFloat(purchases.input_igst || 0)
+      },
+      inwardSupplies: {
         totalItc: parseFloat(purchases.total_input_tax || 0),
         totalTaxableAmount: parseFloat(purchases.taxable_purchases || 0),
         totalBills: parseInt(purchases.total_purchase_bills || 0),
@@ -543,8 +555,8 @@ class ReportRepository {
         AND o.created_at >= ?
         AND o.created_at <= ?
         AND o.order_status = 'completed'
-        AND (o.is_sales_order = 0 OR o.is_sales_order IS NULL)
         AND (o.is_estimate = 0 OR o.is_estimate IS NULL)
+        AND (o.is_sales_order = 0 OR o.is_sales_order IS NULL OR (o.is_sales_order = 1 AND NOT EXISTS (SELECT 1 FROM orders ch WHERE ch.parent_order_id = o.id AND ch.order_status = 'completed')))
         AND c.gst_number IS NOT NULL
         AND c.gst_number != ''
       ORDER BY o.id DESC
@@ -578,8 +590,8 @@ class ReportRepository {
         AND o.created_at >= ?
         AND o.created_at <= ?
         AND o.order_status = 'completed'
-        AND (o.is_sales_order = 0 OR o.is_sales_order IS NULL)
         AND (o.is_estimate = 0 OR o.is_estimate IS NULL)
+        AND (o.is_sales_order = 0 OR o.is_sales_order IS NULL OR (o.is_sales_order = 1 AND NOT EXISTS (SELECT 1 FROM orders ch WHERE ch.parent_order_id = o.id AND ch.order_status = 'completed')))
         AND (c.gst_number IS NULL OR c.gst_number = '')
       ORDER BY o.id DESC
     `, [restaurantId, dateFrom, dateTo]);
@@ -626,8 +638,8 @@ class ReportRepository {
         AND o.created_at >= ?
         AND o.created_at <= ?
         AND o.order_status = 'completed'
-        AND (o.is_sales_order = 0 OR o.is_sales_order IS NULL)
         AND (o.is_estimate = 0 OR o.is_estimate IS NULL)
+        AND (o.is_sales_order = 0 OR o.is_sales_order IS NULL OR (o.is_sales_order = 1 AND NOT EXISTS (SELECT 1 FROM orders ch WHERE ch.parent_order_id = o.id AND ch.order_status = 'completed')))
       GROUP BY COALESCE(oi.hsn_code, m.hsn_code, '1905'), COALESCE(m.name, oi.name), COALESCE(oi.weight_unit, m.base_unit, 'PCS'), COALESCE(oi.gst_rate, 5.00)
       ORDER BY total_taxable_value DESC
     `, [restaurantId, dateFrom, dateTo]);
@@ -658,12 +670,14 @@ class ReportRepository {
         pb.place_of_supply,
         pb.tax_type,
         (pb.subtotal - pb.discount_amount) as taxable_value,
+        (pb.subtotal - pb.discount_amount) as taxable_amount,
         pb.cgst_amount,
         pb.sgst_amount,
         pb.igst_amount,
         pb.tax_amount as total_itc,
         pb.additional_charges,
         pb.total_amount as invoice_value,
+        pb.total_amount,
         pb.paid_amount,
         pb.payment_status
       FROM purchase_bills pb
@@ -692,6 +706,7 @@ class ReportRepository {
 
     return {
       purchases: billRows,
+      inwardSupplies: billRows,
       debitNotes: prRows
     };
   }
@@ -729,7 +744,181 @@ class ReportRepository {
       salesHsn: gstr1.hsnSummary,
       purchaseHsn: purchaseHsnRows,
       hsnSummary: gstr1.hsnSummary,
-      hsn: gstr1.hsnSummary
+      hsn: gstr1.hsnSummary,
+      items: gstr1.hsnSummary
+    };
+  }
+
+  /**
+   * GSTR-3B Monthly Return Summary
+   * Official statutory format conforming to Tables 3.1, 4, and 5.1
+   */
+  static async getGstr3bReport(restaurantId, dateFrom, dateTo) {
+    const dashboard = await this.getGstDashboardSummary(restaurantId, dateFrom, dateTo);
+    const { sales, creditNotes, purchases, debitNotes, rateBreakdown, storeInfo } = dashboard;
+
+    const grossTaxableSales = parseFloat(sales.taxableSales || 0);
+    const cnTaxable = parseFloat(creditNotes.taxable || 0);
+    const netTaxableOutward = Math.max(0, grossTaxableSales - cnTaxable);
+
+    const grossCgst = parseFloat(sales.cgst || 0);
+    const grossSgst = parseFloat(sales.sgst || 0);
+    const grossIgst = parseFloat(sales.igst || 0);
+
+    const cnCgst = parseFloat(creditNotes.cgst || 0);
+    const cnSgst = parseFloat(creditNotes.sgst || 0);
+    const cnIgst = parseFloat(creditNotes.igst || 0);
+
+    const netOutwardCgst = Math.max(0, grossCgst - cnCgst);
+    const netOutwardSgst = Math.max(0, grossSgst - cnSgst);
+    const netOutwardIgst = Math.max(0, grossIgst - cnIgst);
+
+    const zeroRateTaxable = rateBreakdown && rateBreakdown['0%'] ? parseFloat(rateBreakdown['0%'].taxableAmount || 0) : 0;
+    const taxableNonZero = Math.max(0, netTaxableOutward - zeroRateTaxable);
+
+    const itcAvailableCgst = parseFloat(purchases.cgst || 0);
+    const itcAvailableSgst = parseFloat(purchases.sgst || 0);
+    const itcAvailableIgst = parseFloat(purchases.igst || 0);
+
+    const itcReversedCgst = parseFloat(debitNotes.cgst || 0);
+    const itcReversedSgst = parseFloat(debitNotes.sgst || 0);
+    const itcReversedIgst = parseFloat(debitNotes.igst || 0);
+
+    const netItcCgst = Math.max(0, itcAvailableCgst - itcReversedCgst);
+    const netItcSgst = Math.max(0, itcAvailableSgst - itcReversedSgst);
+    const netItcIgst = Math.max(0, itcAvailableIgst - itcReversedIgst);
+
+    const payableCgst = netOutwardCgst;
+    const payableSgst = netOutwardSgst;
+    const payableIgst = netOutwardIgst;
+
+    const itcPaidCgst = Math.min(payableCgst, netItcCgst);
+    const itcPaidSgst = Math.min(payableSgst, netItcSgst);
+    const itcPaidIgst = Math.min(payableIgst, netItcIgst);
+
+    const cashPaidCgst = Math.max(0, payableCgst - itcPaidCgst);
+    const cashPaidSgst = Math.max(0, payableSgst - itcPaidSgst);
+    const cashPaidIgst = Math.max(0, payableIgst - itcPaidIgst);
+
+    return {
+      storeInfo,
+      table3_1: {
+        outward_taxable: {
+          code: '3.1(a)',
+          nature: 'Outward taxable supplies (other than zero rated, nil rated and exempted)',
+          taxable_value: parseFloat(taxableNonZero.toFixed(2)),
+          igst: parseFloat(netOutwardIgst.toFixed(2)),
+          cgst: parseFloat(netOutwardCgst.toFixed(2)),
+          sgst: parseFloat(netOutwardSgst.toFixed(2)),
+          cess: 0
+        },
+        zero_rated: {
+          code: '3.1(b)',
+          nature: 'Outward taxable supplies (zero rated / exports)',
+          taxable_value: 0,
+          igst: 0,
+          cgst: 0,
+          sgst: 0,
+          cess: 0
+        },
+        nil_exempt: {
+          code: '3.1(c)',
+          nature: 'Other outward supplies (Nil rated, exempted)',
+          taxable_value: parseFloat(zeroRateTaxable.toFixed(2)),
+          igst: 0,
+          cgst: 0,
+          sgst: 0,
+          cess: 0
+        },
+        reverse_charge: {
+          code: '3.1(d)',
+          nature: 'Inward supplies liable to reverse charge',
+          taxable_value: 0,
+          igst: 0,
+          cgst: 0,
+          sgst: 0,
+          cess: 0
+        },
+        non_gst: {
+          code: '3.1(e)',
+          nature: 'Non-GST outward supplies',
+          taxable_value: 0,
+          igst: 0,
+          cgst: 0,
+          sgst: 0,
+          cess: 0
+        },
+        total: {
+          taxable_value: parseFloat(netTaxableOutward.toFixed(2)),
+          igst: parseFloat(netOutwardIgst.toFixed(2)),
+          cgst: parseFloat(netOutwardCgst.toFixed(2)),
+          sgst: parseFloat(netOutwardSgst.toFixed(2)),
+          total_tax: parseFloat((netOutwardIgst + netOutwardCgst + netOutwardSgst).toFixed(2))
+        }
+      },
+      table4_itc: {
+        itc_available: {
+          import_goods: { nature: '(1) Import of goods', igst: 0, cgst: 0, sgst: 0, cess: 0 },
+          import_services: { nature: '(2) Import of services', igst: 0, cgst: 0, sgst: 0, cess: 0 },
+          reverse_charge: { nature: '(3) Inward supplies liable to reverse charge', igst: 0, cgst: 0, sgst: 0, cess: 0 },
+          isd: { nature: '(4) Inward supplies from ISD', igst: 0, cgst: 0, sgst: 0, cess: 0 },
+          all_other: {
+            nature: '(5) All other ITC (Purchases from registered suppliers)',
+            taxable_value: parseFloat((purchases.taxablePurchases || 0).toFixed(2)),
+            igst: parseFloat(itcAvailableIgst.toFixed(2)),
+            cgst: parseFloat(itcAvailableCgst.toFixed(2)),
+            sgst: parseFloat(itcAvailableSgst.toFixed(2)),
+            cess: 0
+          }
+        },
+        itc_reversed: {
+          rule_reversal: { nature: '(1) As per rules 42 & 43 of CGST Rules', igst: 0, cgst: 0, sgst: 0, cess: 0 },
+          others: {
+            nature: '(2) Others (Debit Notes / Purchase Returns)',
+            igst: parseFloat(itcReversedIgst.toFixed(2)),
+            cgst: parseFloat(itcReversedCgst.toFixed(2)),
+            sgst: parseFloat(itcReversedSgst.toFixed(2)),
+            cess: 0
+          }
+        },
+        net_itc: {
+          nature: '(C) Net ITC Available (A - B)',
+          igst: parseFloat(netItcIgst.toFixed(2)),
+          cgst: parseFloat(netItcCgst.toFixed(2)),
+          sgst: parseFloat(netItcSgst.toFixed(2)),
+          total: parseFloat((netItcIgst + netItcCgst + netItcSgst).toFixed(2))
+        }
+      },
+      table5_payment: {
+        igst: {
+          tax_payable: parseFloat(payableIgst.toFixed(2)),
+          itc_paid: parseFloat(itcPaidIgst.toFixed(2)),
+          cash_paid: parseFloat(cashPaidIgst.toFixed(2)),
+          interest: 0,
+          late_fee: 0
+        },
+        cgst: {
+          tax_payable: parseFloat(payableCgst.toFixed(2)),
+          itc_paid: parseFloat(itcPaidCgst.toFixed(2)),
+          cash_paid: parseFloat(cashPaidCgst.toFixed(2)),
+          interest: 0,
+          late_fee: 0
+        },
+        sgst: {
+          tax_payable: parseFloat(payableSgst.toFixed(2)),
+          itc_paid: parseFloat(itcPaidSgst.toFixed(2)),
+          cash_paid: parseFloat(cashPaidSgst.toFixed(2)),
+          interest: 0,
+          late_fee: 0
+        },
+        total: {
+          tax_payable: parseFloat((payableIgst + payableCgst + payableSgst).toFixed(2)),
+          itc_paid: parseFloat((itcPaidIgst + itcPaidCgst + itcPaidSgst).toFixed(2)),
+          cash_paid: parseFloat((cashPaidIgst + cashPaidCgst + cashPaidSgst).toFixed(2)),
+          interest: 0,
+          late_fee: 0
+        }
+      }
     };
   }
 }

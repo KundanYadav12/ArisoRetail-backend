@@ -128,7 +128,13 @@ class WarehouseRepository {
       `, [restaurantId, warehouseId, restaurantId]);
 
       await connection.commit();
-      return { id: warehouseId, ...data };
+      return {
+        id: warehouseId,
+        ...data,
+        code: (code || name.substring(0, 4).toUpperCase()).trim(),
+        is_default: is_default ? 1 : 0,
+        status: status || 'active'
+      };
     } catch (err) {
       await connection.rollback();
       throw err;

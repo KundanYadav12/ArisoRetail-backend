@@ -5,8 +5,18 @@ const net = require('net');
 class PrinterController {
   static async getAll(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id;
-      const printers = await PrinterRepository.getAll(restaurantId);
+      const restaurantId = req.user?.restaurant_id || 1;
+      let printers = await PrinterRepository.getAll(restaurantId);
+
+      // If no printer is registered in DB, automatically scan local network and sync
+      if (printers.length === 0) {
+        const PrinterService = require('../services/printer_service');
+        const autoPrn = await PrinterService.autoResolveAndSyncPrinter(restaurantId).catch(() => null);
+        if (autoPrn) {
+          printers = await PrinterRepository.getAll(restaurantId);
+        }
+      }
+
       return res.json(printers);
     } catch (err) {
       console.error(err);
@@ -14,9 +24,35 @@ class PrinterController {
     }
   }
 
+  /**
+   * Scan active local Wi-Fi / subnet for thermal printers listening on port 9100
+   */
+  static async discoverPrinters(req, res) {
+    try {
+      const restaurantId = req.user?.restaurant_id || 1;
+      const PrinterService = require('../services/printer_service');
+      const discovered = await PrinterService.discoverNetworkPrinters();
+
+      // Automatically sync discovered printer into DB
+      if (discovered.length > 0) {
+        await PrinterService.autoResolveAndSyncPrinter(restaurantId).catch(() => {});
+      }
+
+      const activePrinters = await PrinterRepository.getAll(restaurantId);
+      return res.json({
+        success: true,
+        discovered,
+        printers: activePrinters
+      });
+    } catch (err) {
+      console.error('[Discover Printers Error]', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
   static async getById(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id;
+      const restaurantId = req.user?.restaurant_id || 1;
       const printer = await PrinterRepository.getById(req.params.id, restaurantId);
       if (!printer) {
         return res.status(404).json({ error: 'Printer configuration not found.' });
@@ -35,7 +71,7 @@ class PrinterController {
     }
 
     try {
-      const restaurantId = req.user.restaurant_id;
+      const restaurantId = req.user?.restaurant_id || 1;
       const printerId = await PrinterRepository.create(restaurantId, {
         name, type, ip_address, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer
       });
@@ -55,7 +91,7 @@ class PrinterController {
     }
 
     try {
-      const restaurantId = req.user.restaurant_id;
+      const restaurantId = req.user?.restaurant_id || 1;
       const success = await PrinterRepository.update(req.params.id, restaurantId, {
         name, type, ip_address, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer, is_active, status
       });
@@ -97,7 +133,7 @@ class PrinterController {
 
   static async delete(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id;
+      const restaurantId = req.user?.restaurant_id || 1;
       const success = await PrinterRepository.delete(req.params.id, restaurantId);
       if (!success) {
         return res.status(404).json({ error: 'Printer not found or unauthorized.' });
@@ -112,87 +148,104 @@ class PrinterController {
   }
 
   /**
-  /**
    * Test Socket connection & print test receipt on LAN network thermal printer
    */
   static async testConnection(req, res) {
-    const { ip_address, port, paper_width, name } = req.body;
-    if (!ip_address) {
-      return res.status(400).json({ error: 'IP Address is required to run connection test.' });
+    const { id, ip_address, port, paper_width, name } = req.body;
+    const restaurantId = req.user?.restaurant_id || 1;
+    const PrinterService = require('../services/printer_service');
+
+    let targetIp = ip_address;
+    let targetPort = parseInt(port || 9100, 10);
+    let targetName = name || 'LAN Thermal Printer';
+    let targetWidth = paper_width || '80';
+
+    if (!targetIp && id) {
+      const prn = await PrinterRepository.getById(id, restaurantId);
+      if (prn) {
+        targetIp = prn.ip_address;
+        targetPort = parseInt(prn.port || 9100, 10);
+        targetName = prn.name;
+        targetWidth = prn.paper_width || '80';
+      }
     }
 
-    const testPort = parseInt(port || 9100, 10);
-    const cols = (paper_width === 58 || paper_width === '58') ? 32 : 48;
+    if (!targetIp) {
+      // Auto-detect printer on local Wi-Fi / network
+      const autoPrn = await PrinterService.autoResolveAndSyncPrinter(restaurantId);
+      if (autoPrn && autoPrn.ip_address) {
+        targetIp = autoPrn.ip_address;
+        targetPort = parseInt(autoPrn.port || 9100, 10);
+        targetName = autoPrn.name;
+        targetWidth = autoPrn.paper_width || '80';
+      }
+    }
+
+    if (!targetIp) {
+      return res.status(400).json({
+        status: 'failed',
+        error: 'No LAN printer IP address specified and none detected on this local network.'
+      });
+    }
+
+    const cols = (targetWidth === 58 || targetWidth === '58') ? 32 : 48;
     const divider = '-'.repeat(cols) + '\n';
     const doubleDivider = '='.repeat(cols) + '\n';
 
-    let testReceipt = '\x1B@\x1Ba\x01\x1BE\x01';
-    testReceipt += (cols === 48 ? '\x1DD\x11' : '');
-    testReceipt += 'ARISO RETAIL POS\n\x1DE\x00\x1BE\x00';
-    testReceipt += 'LAN THERMAL PRINTER TEST\n';
+    let testReceipt = '\x1B@'; // ESC @: Initialize
+    testReceipt += '\x1Ba\x01'; // Center align
+    testReceipt += '\x1BE\x01'; // Bold on
+    testReceipt += (cols === 48 ? '\x1D!\x11' : ''); // Double size if 80mm
+    testReceipt += 'ARISO RETAIL POS\n';
+    testReceipt += (cols === 48 ? '\x1D!\x00' : ''); // Normal size
+    testReceipt += '\x1BE\x00'; // Bold off
     testReceipt += doubleDivider;
-    testReceipt += '\x1Ba\x00';
-    testReceipt += `Printer Name : ${name || 'LAN Thermal Printer'}\n`;
-    testReceipt += `IP Address   : ${ip_address}\n`;
-    testReceipt += `Port         : ${testPort}\n`;
-    testReceipt += `Paper Width  : ${paper_width || 80}mm (${cols} cols)\n`;
+    testReceipt += '\x1Ba\x00'; // Left align
+    testReceipt += `Printer Name : ${targetName}\n`;
+    testReceipt += `IP Address   : ${targetIp}\n`;
+    testReceipt += `Port         : ${targetPort}\n`;
+    testReceipt += `Paper Width  : ${targetWidth}mm (${cols} cols)\n`;
     testReceipt += `Test Date    : ${new Date().toLocaleString()}\n`;
     testReceipt += `Status       : CONNECTED & ONLINE ✅\n`;
     testReceipt += divider;
-    testReceipt += '\x1Ba\x01';
+    testReceipt += '\x1Ba\x01'; // Center align
     testReceipt += '*** TEST PRINT SUCCESSFUL ***\n';
-    testReceipt += 'Ariso Retail POS System\n\n\n\x1DV\x41\x03'; // Paper cut
+    testReceipt += 'LAN Direct Thermal Printing Ready\n\n\n\n';
+    testReceipt += '\x1DV\x41\x03'; // Paper cut
 
-    const isMock = !ip_address || ip_address === '127.0.0.1' || ip_address.startsWith('192.168.99') || ip_address === 'localhost';
-
-    if (isMock) {
-      console.log(`[LAN Printer Mock] Test receipt simulated for ${ip_address || 'virtual'}:${testPort}`);
+    try {
+      const result = await PrinterService.sendToPrinterSocket(targetIp, targetPort, Buffer.from(testReceipt, 'utf-8'));
+      if (id) {
+        await PrinterRepository.updateStatus(id, restaurantId, 'online').catch(() => {});
+      }
       return res.json({
         status: 'connected',
-        message: `Successfully connected to virtual LAN printer at ${ip_address || 'virtual'}:${testPort} and performed test print!`,
-        is_mock: true
+        success: true,
+        message: `Successfully connected to LAN printer "${targetName}" (${targetIp}:${targetPort}) and printed test receipt!`,
+        printer: { name: targetName, ip: targetIp, port: targetPort },
+        details: result
       });
-    }
-
-    const client = new net.Socket();
-    client.setTimeout(3000); // 3 second timeout
-
-    client.connect(testPort, ip_address, () => {
-      client.write(Buffer.from(testReceipt, 'utf-8'), () => {
-        client.end();
-        return res.json({
-          status: 'connected',
-          message: `Successfully connected to LAN printer at ${ip_address}:${testPort} and printed test receipt!`
-        });
-      });
-    });
-
-    client.on('error', (err) => {
-      client.destroy();
+    } catch (err) {
+      if (id) {
+        await PrinterRepository.updateStatus(id, restaurantId, 'offline').catch(() => {});
+      }
       return res.status(502).json({
         status: 'failed',
-        error: `Printer socket unreachable at ${ip_address}:${testPort}. (${err.message})`
+        success: false,
+        error: `Printer socket unreachable at ${targetIp}:${targetPort}. (${err.message})`
       });
-    });
-
-    client.on('timeout', () => {
-      client.destroy();
-      return res.status(504).json({
-        status: 'failed',
-        error: `Connection timed out connecting to printer at ${ip_address}:${testPort}. Check network connection and printer IP.`
-      });
-    });
+    }
   }
 
   /**
-   * Directly print a completed Retail sale receipt over LAN thermal socket & Gateway Agent Queue
+   * Directly print a completed Retail sale receipt or KOT over LAN thermal socket & Gateway Agent Queue
    */
   static async printReceipt(req, res) {
-    const { order, items, printer_id } = req.body;
-    const restaurantId = req.user ? req.user.restaurant_id : 1;
+    const { order, items, printer_id, payload_base64, print_type } = req.body;
+    const restaurantId = req.user?.restaurant_id || (order && order.restaurant_id) || 1;
 
     if (!order || !items || !Array.isArray(items)) {
-      return res.status(400).json({ error: 'Order and items payload are required for printing.' });
+      return res.status(400).json({ success: false, error: 'Order and items payload are required for printing.' });
     }
 
     try {
@@ -205,73 +258,135 @@ class PrinterController {
         targetPrinter = await PrinterRepository.getById(printer_id, restaurantId);
       }
       if (!targetPrinter) {
+        if (print_type === 'KOT') {
+          targetPrinter = await PrinterRepository.getDefaultKOTPrinter(restaurantId);
+        } else {
+          targetPrinter = await PrinterRepository.getDefaultReceiptPrinter(restaurantId);
+        }
+      }
+      if (!targetPrinter) {
         const printers = await PrinterRepository.getAll(restaurantId);
-        targetPrinter = printers.find(p => p.is_default_receipt === 1 || p.role === 'receipt') || printers[0];
+        targetPrinter = printers.find(p => (print_type === 'KOT' ? p.is_default_kot === 1 : p.is_default_receipt === 1) && (p.type === 'lan' || p.type === 'network' || !!p.ip_address))
+          || printers.find(p => p.type === 'lan' || p.type === 'network' || !!p.ip_address)
+          || printers.find(p => (print_type === 'KOT' ? p.role === 'kitchen' : p.role === 'receipt'))
+          || printers[0];
       }
 
-      if (!targetPrinter) {
-        return res.status(404).json({ error: 'No active LAN thermal printer configured.' });
+      // If no printer configured or missing IP, auto-resolve and sync dynamically from local network
+      if (!targetPrinter || !targetPrinter.ip_address) {
+        targetPrinter = await PrinterService.autoResolveAndSyncPrinter(restaurantId);
       }
+
+      if (!targetPrinter || !targetPrinter.ip_address) {
+        return res.status(404).json({ success: false, error: 'No thermal printer configured or detected on this local network.' });
+      }
+
+      let targetIp = targetPrinter.ip_address;
+      let targetPort = parseInt(targetPrinter.port || 9100, 10);
 
       const receiptSettings = await ReceiptRepository.getSettings(restaurantId);
-      const restaurantInfo = { name: (req.user && req.user.restaurant_name) || 'Ariso Retail' };
+      const restaurantInfo = {
+        name: (req.user && req.user.restaurant_name) || (receiptSettings && receiptSettings.restaurant_name) || 'Ariso Retail',
+        address: (receiptSettings && receiptSettings.address) || '',
+        phone: (receiptSettings && receiptSettings.phone) || ''
+      };
 
-      const bufferPayload = PrinterService.buildReceiptPayload(order, items, restaurantInfo, targetPrinter, receiptSettings);
-      const base64Payload = bufferPayload.toString('base64');
+      let bufferPayload = null;
+      if (payload_base64 && typeof payload_base64 === 'string') {
+        bufferPayload = Buffer.from(payload_base64, 'base64');
+      } else if (print_type === 'KOT') {
+        bufferPayload = PrinterService.buildKOTPayload(order, items, targetPrinter, receiptSettings);
+      } else {
+        bufferPayload = await PrinterService.buildReceiptPayload(order, items, restaurantInfo, targetPrinter, receiptSettings);
+      }
 
-      // 1. Enqueue job into print_queue for Gateway Agent polling
+      const base64ForQueue = bufferPayload.toString('base64');
+
+      // 1. Enqueue job into print_queue for audit / queue history
       let jobId = null;
       try {
         jobId = await PrintQueueRepository.enqueue({
           restaurant_id: restaurantId,
           order_id: order.id || null,
           printer_id: targetPrinter.id,
-          print_type: 'RECEIPT',
-          payload_base64: base64Payload,
+          print_type: print_type || 'RECEIPT',
+          payload_base64: base64ForQueue,
           backend_received_at: new Date()
         });
       } catch (qErr) {
         console.warn('[Print Queue Enqueue Warning]', qErr.message);
       }
 
-      // 2. Direct Local LAN Socket Print Attempt
+      // 2. Direct Local LAN Socket Print Attempt with Dynamic Auto-Reconnect Recovery
       let printResult = null;
-      let printSuccess = false;
-
       try {
         printResult = await PrinterService.sendToPrinterSocket(
-          targetPrinter.ip_address,
-          targetPrinter.port || 9100,
+          targetIp,
+          targetPort,
           bufferPayload
         );
-        printSuccess = true;
-        if (jobId) {
-          await PrintQueueRepository.updateJobStatus(jobId, 'SUCCESS', null);
-        }
-      } catch (socketErr) {
-        console.warn(`[Direct Socket Warning] Direct print to ${targetPrinter.ip_address}:${targetPrinter.port || 9100} skipped (${socketErr.message}). Job remains queued for Gateway Agent.`);
-      }
 
-      // If job is queued for Gateway Agent OR direct print succeeded, report success!
-      if (printSuccess || jobId) {
+        // Update printer status in database to online
+        await PrinterRepository.updateStatus(targetPrinter.id, restaurantId, 'online').catch(() => {});
+
+        if (jobId) {
+          await PrintQueueRepository.updateJobStatus(jobId, 'SUCCESS', null).catch(() => {});
+        }
+
         return res.json({
           success: true,
           job_id: jobId,
-          message: printSuccess 
-            ? `Receipt printed over LAN to ${targetPrinter.name} (${targetPrinter.ip_address}:${targetPrinter.port || 9100})`
-            : `Receipt sent to Ariso Retail Print Gateway Queue (Job #${jobId})`,
+          message: `${print_type === 'KOT' ? 'KOT' : 'Receipt'} printed over LAN to ${targetPrinter.name} (${targetIp}:${targetPort})`,
           printer: targetPrinter.name,
           details: printResult
         });
-      } else {
+      } catch (socketErr) {
+        console.warn(`[Direct Socket Error] Direct LAN print to ${targetPrinter.name} (${targetIp}:${targetPort}) failed:`, socketErr.message);
+
+        // IP change / DHCP reconnection recovery attempt
+        try {
+          console.log(`[Printer Recovery] Attempting auto-discovery to check for dynamic IP reassignment...`);
+          const recovered = await PrinterService.autoResolveAndSyncPrinter(restaurantId);
+          if (recovered && recovered.ip_address && (recovered.ip_address !== targetIp || recovered.port !== targetPort)) {
+            console.log(`[Printer Recovered] Found printer at new dynamic IP ${recovered.ip_address}:${recovered.port || 9100}. Retrying print...`);
+            targetIp = recovered.ip_address;
+            targetPort = parseInt(recovered.port || 9100, 10);
+            targetPrinter = recovered;
+
+            printResult = await PrinterService.sendToPrinterSocket(targetIp, targetPort, bufferPayload);
+            await PrinterRepository.updateStatus(targetPrinter.id, restaurantId, 'online').catch(() => {});
+            if (jobId) {
+              await PrintQueueRepository.updateJobStatus(jobId, 'SUCCESS', null).catch(() => {});
+            }
+            return res.json({
+              success: true,
+              job_id: jobId,
+              message: `${print_type === 'KOT' ? 'KOT' : 'Receipt'} printed over LAN to ${targetPrinter.name} (${targetIp}:${targetPort})`,
+              printer: targetPrinter.name,
+              details: printResult
+            });
+          }
+        } catch (recoveryErr) {
+          console.warn('[Printer Dynamic Recovery Error]', recoveryErr.message);
+        }
+
+        // Mark printer status in database to offline
+        await PrinterRepository.updateStatus(targetPrinter.id, restaurantId, 'offline').catch(() => {});
+
+        if (jobId) {
+          await PrintQueueRepository.updateJobStatus(jobId, 'FAILED', socketErr.message).catch(() => {});
+        }
+
         return res.status(502).json({
-          error: `Failed to print receipt over LAN or enqueue to gateway queue.`
+          success: false,
+          error: `LAN Thermal Printer "${targetPrinter.name}" (${targetIp}:${targetPort}) is offline or unreachable on this network. Please ensure the printer is turned on and connected to the same Wi-Fi/network.`
         });
       }
     } catch (err) {
       console.error('[LAN Print Receipt Error]:', err.message);
-      return res.status(502).json({
-        error: `Failed to print receipt over LAN: ${err.message}`
+      return res.status(500).json({
+        success: false,
+        error: `Failed to process print request: ${err.message}`
       });
     }
   }

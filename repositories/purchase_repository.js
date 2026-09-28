@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const StockMovementService = require('../services/stock_movement_service');
+const SerialNumberService = require('../services/serial_number_service');
 const { GstService } = require('../services/gst_service');
 const { getISTDateString } = require('../utils/date_utils');
 
@@ -17,12 +18,17 @@ class PurchaseRepository {
         s.company_name as supplier_company,
         w.name as warehouse_name,
         w.code as warehouse_code,
-        COUNT(poi.id) as total_items,
-        COALESCE(SUM(poi.quantity), 0) as total_quantity
+        COUNT(DISTINCT poi.id) as total_items,
+        COALESCE(SUM(poi.quantity), 0) as total_quantity,
+        COALESCE(SUM(poi.billed_qty), 0) as total_billed_quantity,
+        COUNT(DISTINCT pb.id) as bill_count,
+        GROUP_CONCAT(DISTINCT pb.id) as bill_ids,
+        GROUP_CONCAT(DISTINCT COALESCE(pb.internal_bill_number, pb.bill_number)) as bill_numbers
       FROM purchase_orders po
       LEFT JOIN suppliers s ON po.supplier_id = s.id
       LEFT JOIN warehouses w ON po.warehouse_id = w.id
       LEFT JOIN purchase_order_items poi ON po.id = poi.purchase_order_id
+      LEFT JOIN purchase_bills pb ON po.id = pb.purchase_order_id AND pb.status != 'cancelled'
       WHERE po.restaurant_id = ?
     `;
 
@@ -94,7 +100,7 @@ class PurchaseRepository {
         mi.sku,
         mi.item_code
       FROM purchase_order_items poi
-      JOIN menu_items mi ON poi.menu_item_id = mi.id
+      LEFT JOIN menu_items mi ON poi.menu_item_id = mi.id
       WHERE poi.purchase_order_id = ?
       ORDER BY poi.id ASC
     `, [id]);
@@ -213,7 +219,9 @@ class PurchaseRepository {
    * Fetch all Purchase Bills (Goods Received)
    */
   static async getBills(restaurantId, filters = {}) {
-    const { supplier_id, warehouse_id, payment_status, date_from, date_to, search, purchase_order_id } = filters;
+    const { supplier_id, warehouse_id, payment_status, date_from, date_to, search } = filters;
+    const purchase_order_id = filters.purchase_order_id || filters.purchase_order_id_filter;
+    const grn_id = filters.grn_id;
 
     let query = `
       SELECT 
@@ -223,7 +231,7 @@ class PurchaseRepository {
         w.name as warehouse_name,
         w.code as warehouse_code,
         po.po_number,
-        COUNT(pbi.id) as total_items,
+        COUNT(DISTINCT pbi.id) as total_items,
         COALESCE(SUM(pbi.quantity), 0) as total_quantity
       FROM purchase_bills pb
       LEFT JOIN suppliers s ON pb.supplier_id = s.id
@@ -238,6 +246,11 @@ class PurchaseRepository {
     if (purchase_order_id) {
       query += ' AND pb.purchase_order_id = ?';
       params.push(purchase_order_id);
+    }
+
+    if (grn_id) {
+      query += ' AND pb.grn_id = ?';
+      params.push(grn_id);
     }
 
     if (payment_status && payment_status !== 'all') {
@@ -282,18 +295,23 @@ class PurchaseRepository {
    */
   static async getBillById(id, restaurantId) {
     const [headerRows] = await pool.execute(`
-      SELECT 
+      SELECT
         pb.*,
-        s.name as supplier_name,
-        s.company_name as supplier_company,
-        s.mobile as supplier_mobile,
-        s.gst_number as supplier_gst,
-        w.name as warehouse_name,
-        w.code as warehouse_code,
+        s.name        AS supplier_name,
+        s.company_name AS supplier_company,
+        s.mobile      AS supplier_mobile,
+        s.email       AS supplier_email,
+        s.address     AS supplier_address,
+        s.city        AS supplier_city,
+        s.state       AS supplier_state,
+        s.gst_number  AS supplier_gst,
+        w.name        AS warehouse_name,
+        w.code        AS warehouse_code,
+        w.address     AS warehouse_address,
         po.po_number
       FROM purchase_bills pb
-      LEFT JOIN suppliers s ON pb.supplier_id = s.id
-      LEFT JOIN warehouses w ON pb.warehouse_id = w.id
+      LEFT JOIN suppliers  s  ON pb.supplier_id   = s.id
+      LEFT JOIN warehouses w  ON pb.warehouse_id  = w.id
       LEFT JOIN purchase_orders po ON pb.purchase_order_id = po.id
       WHERE pb.id = ? AND pb.restaurant_id = ?
     `, [id, restaurantId]);
@@ -303,10 +321,9 @@ class PurchaseRepository {
     const bill = headerRows[0];
 
     const [items] = await pool.execute(`
-      SELECT 
+      SELECT
         pbi.*,
-        mi.sku,
-        mi.item_code
+        mi.sku, mi.item_code, mi.hsn_code AS mi_hsn
       FROM purchase_bill_items pbi
       JOIN menu_items mi ON pbi.menu_item_id = mi.id
       WHERE pbi.purchase_bill_id = ?
@@ -318,6 +335,41 @@ class PurchaseRepository {
   }
 
   /**
+   * Get Next Sequential Purchase Bill Number for preview / prefilling
+   * Format: PB-YYYYMMDD-#### (e.g. PB-20260928-0001)
+   */
+  static async getNextBillNumber(restaurantId, billDate = null) {
+    const effectiveDate = billDate || getISTDateString();
+    const today = effectiveDate.replace(/-/g, '');
+    const prefix = `PB-${today}-`;
+
+    const [rows] = await pool.execute(`
+      SELECT internal_bill_number, bill_number 
+      FROM purchase_bills 
+      WHERE restaurant_id = ? 
+        AND (internal_bill_number LIKE ? OR bill_number LIKE ?)
+    `, [restaurantId, `${prefix}%`, `${prefix}%`]);
+
+    let maxSeq = 0;
+    for (const r of rows) {
+      for (const val of [r.internal_bill_number, r.bill_number]) {
+        if (val && typeof val === 'string' && val.startsWith(prefix)) {
+          const parts = val.split('-');
+          if (parts.length >= 3) {
+            const num = parseInt(parts[2], 10);
+            if (!isNaN(num) && num > maxSeq) {
+              maxSeq = num;
+            }
+          }
+        }
+      }
+    }
+
+    const nextSeq = maxSeq + 1;
+    return `${prefix}${String(nextSeq).padStart(4, '0')}`;
+  }
+
+  /**
    * Create a Purchase Bill (Goods Received Note)
    * ATOMICALLY INCREASES INVENTORY in the target warehouse and updates supplier balance.
    */
@@ -325,6 +377,7 @@ class PurchaseRepository {
     const {
       bill_number,
       purchase_order_id = null,
+      grn_id = null,
       supplier_id,
       warehouse_id,
       bill_date,
@@ -350,16 +403,53 @@ class PurchaseRepository {
       const prefix = `PB-${today}-`;
 
       const [seqRows] = await connection.execute(
-        'SELECT internal_bill_number FROM purchase_bills WHERE restaurant_id = ? AND internal_bill_number LIKE ? ORDER BY id DESC LIMIT 1 FOR UPDATE',
-        [restaurantId, `${prefix}%`]
+        'SELECT internal_bill_number, bill_number FROM purchase_bills WHERE restaurant_id = ? AND (internal_bill_number LIKE ? OR bill_number LIKE ?) FOR UPDATE',
+        [restaurantId, `${prefix}%`, `${prefix}%`]
       );
 
-      let seqNum = 1;
-      if (seqRows.length > 0) {
-        const lastNum = parseInt(seqRows[0].internal_bill_number.split('-')[2], 10);
-        if (!isNaN(lastNum)) seqNum = lastNum + 1;
+      let maxSeq = 0;
+      for (const r of seqRows) {
+        for (const val of [r.internal_bill_number, r.bill_number]) {
+          if (val && typeof val === 'string' && val.startsWith(prefix)) {
+            const parts = val.split('-');
+            if (parts.length >= 3) {
+              const num = parseInt(parts[2], 10);
+              if (!isNaN(num) && num > maxSeq) {
+                maxSeq = num;
+              }
+            }
+          }
+        }
       }
-      const internalBillNumber = `${prefix}${String(seqNum).padStart(4, '0')}`;
+      const nextSeq = maxSeq + 1;
+      const internalBillNumber = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+
+      // Handle bill_number & duplicate checks
+      const submittedBillNumber = (bill_number && typeof bill_number === 'string') ? bill_number.trim() : '';
+      const isAuto = data.is_auto_generated === true || !submittedBillNumber || (submittedBillNumber.startsWith(prefix) && submittedBillNumber.length === prefix.length + 4);
+
+      let finalBillNumber = submittedBillNumber || internalBillNumber;
+
+      if (isAuto) {
+        // If auto-generated, check if the specific number is already used (e.g. concurrent submission)
+        const [exists] = await connection.execute(
+          'SELECT id FROM purchase_bills WHERE restaurant_id = ? AND (bill_number = ? OR internal_bill_number = ?) AND status != "cancelled" LIMIT 1',
+          [restaurantId, finalBillNumber, finalBillNumber]
+        );
+        // If taken, safely assign the fresh unique sequential internalBillNumber
+        if (exists.length > 0) {
+          finalBillNumber = internalBillNumber;
+        }
+      } else {
+        // User explicitly edited / provided a custom vendor invoice number. Enforce uniqueness per supplier!
+        const [dup] = await connection.execute(
+          'SELECT id, bill_number FROM purchase_bills WHERE restaurant_id = ? AND supplier_id = ? AND bill_number = ? AND status != "cancelled" LIMIT 1',
+          [restaurantId, supplier_id, finalBillNumber]
+        );
+        if (dup.length > 0) {
+          throw new Error(`Vendor Bill Number "${finalBillNumber}" already exists for this supplier. Please enter a unique bill number.`);
+        }
+      }
 
       const [settingsRows] = await connection.execute(
         'SELECT state, state_code FROM receipt_settings WHERE restaurant_id = ?',
@@ -444,16 +534,16 @@ class PurchaseRepository {
 
       const [result] = await connection.execute(`
         INSERT INTO purchase_bills (
-          restaurant_id, bill_number, internal_bill_number, purchase_order_id,
+          restaurant_id, bill_number, internal_bill_number, purchase_order_id, grn_id,
           supplier_id, warehouse_id, bill_date, due_date,
           subtotal, tax_amount, discount_amount, additional_charges,
           total_amount, paid_amount, payment_status, payment_mode,
           status, created_by_user_id, created_by_name, notes, created_at,
           tax_type, cgst_amount, sgst_amount, igst_amount, place_of_supply, supplier_gstin
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)
       `, [
-        restaurantId, bill_number || internalBillNumber, internalBillNumber,
-        purchase_order_id || null, supplier_id, warehouse_id,
+        restaurantId, finalBillNumber, internalBillNumber,
+        purchase_order_id || null, grn_id || null, supplier_id, warehouse_id,
         bill_date || getISTDateString(),
         due_date || null, subtotal, totalTax, totalDiscount, addCharges,
         totalAmount, paid, paymentStatus, payment_mode || null,
@@ -477,11 +567,11 @@ class PurchaseRepository {
             hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount, rack_id
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
-          billId, menuItemId, it.item_name || it.name,
-          it.unit || 'pcs', it.qty, it.rate, it.taxRate, lc.totalTax, it.disc, lc.lineTotal,
+          billId, menuItemId, it.item_name || it.name || 'Item',
+          it.unit || 'pcs', it.qty, it.rate, it.taxRate, lc.totalTax || 0, it.disc || 0, lc.lineTotal || 0,
           it.batch_number || null, it.expiry_date || null,
-          lc.hsnCode, lc.taxableAmount, lc.cgstRate, lc.cgstAmount, lc.sgstRate, lc.sgstAmount, lc.igstRate, lc.igstAmount,
-          rackId
+          lc.hsnCode || null, lc.taxableAmount || 0, lc.cgstRate || 0, lc.cgstAmount || 0, lc.sgstRate || 0, lc.sgstAmount || 0, lc.igstRate || 0, lc.igstAmount || 0,
+          rackId || null
         ]);
 
         // ATOMIC INVENTORY INCREASE: Record PURCHASE in stock ledger & warehouse_stocks (and rack)
@@ -491,14 +581,14 @@ class PurchaseRepository {
           rackId,
           menuItemId,
           type: 'PURCHASE',
-          quantity: qty,
-          unitCost: rate,
+          quantity: it.qty,
+          unitCost: it.rate,
           referenceType: 'purchase_bill',
           referenceId: billId,
           referenceNumber: internalBillNumber,
           userId,
           userName,
-          notes: `Purchase Bill #${bill_number || internalBillNumber}`
+          notes: `Purchase Bill #${finalBillNumber}`
         });
 
         // Update purchase price and cost price on menu_items
@@ -506,7 +596,27 @@ class PurchaseRepository {
           UPDATE menu_items 
           SET purchase_price = ?, cost_price = ?, updated_at = NOW() 
           WHERE id = ? AND restaurant_id = ?
-        `, [rate, rate, menuItemId, restaurantId]);
+        `, [it.rate, it.rate, menuItemId, restaurantId]);
+      }
+
+      // Automatically generate unique 8-digit Serial Numbers on Purchase Receiving
+      try {
+        await SerialNumberService.recordPurchaseReceiving(connection, {
+          restaurantId,
+          purchaseBillId: billId,
+          purchaseInvoiceNumber: finalBillNumber,
+          purchaseDate: bill_date || getISTDateString(),
+          supplierId: supplier_id,
+          supplierName: supplier?.name || supplier?.company_name || null,
+          warehouseId: warehouse_id,
+          items: processedItems.map(it => ({
+            menu_item_id: it.menu_item_id || it.id,
+            quantity: it.qty,
+            rate: it.rate
+          }))
+        });
+      } catch (snErr) {
+        console.warn('[Purchase Bill Serial Number Auto-Gen Notice]:', snErr.message);
       }
 
       // Update supplier outstanding balance
@@ -517,13 +627,30 @@ class PurchaseRepository {
         WHERE id = ? AND restaurant_id = ?
       `, [outstandingIncrease, supplier_id, restaurantId]);
 
-      // If linked to PO, mark PO received
+      // If linked to PO, track billed_qty on PO items & update PO status
       if (purchase_order_id) {
+        for (const it of processedItems) {
+          const menuItemId = it.menu_item_id || it.id;
+          await connection.execute(`
+            UPDATE purchase_order_items
+            SET billed_qty = billed_qty + ?
+            WHERE purchase_order_id = ? AND menu_item_id = ?
+          `, [it.qty, purchase_order_id, menuItemId]);
+        }
+
+        const [poQtyRows] = await connection.execute(
+          'SELECT SUM(quantity) as total_qty, SUM(billed_qty) as total_billed FROM purchase_order_items WHERE purchase_order_id = ?',
+          [purchase_order_id]
+        );
+        const totalQty = parseFloat(poQtyRows[0]?.total_qty || 0);
+        const totalBilled = parseFloat(poQtyRows[0]?.total_billed || 0);
+        const newStatus = (totalBilled >= totalQty && totalQty > 0) ? 'received' : 'partially_received';
+
         await connection.execute(`
           UPDATE purchase_orders 
-          SET status = 'received', updated_at = NOW() 
+          SET status = ?, updated_at = NOW() 
           WHERE id = ? AND restaurant_id = ?
-        `, [purchase_order_id, restaurantId]);
+        `, [newStatus, purchase_order_id, restaurantId]);
       }
 
       await connection.commit();
@@ -1074,6 +1201,25 @@ class PurchaseRepository {
         }
       }
 
+      // Automatically generate unique 8-digit Serial Numbers on GRN Stock Receiving
+      try {
+        await SerialNumberService.recordPurchaseReceiving(connection, {
+          restaurantId,
+          grnId,
+          purchaseInvoiceNumber: invoice_number || grnNumber,
+          purchaseDate: grnDate,
+          supplierId: supplierId,
+          warehouseId: warehouseId,
+          items: items.filter(it => (it._acceptedQty || it.accepted_qty) > 0).map(it => ({
+            menu_item_id: it._menuItemId || it.menu_item_id || it.id,
+            quantity: it._acceptedQty || it.accepted_qty,
+            rate: parseFloat(it.rate || 0)
+          }))
+        });
+      } catch (snErr) {
+        console.warn('[GRN Serial Number Auto-Gen Notice]:', snErr.message);
+      }
+
       // Recalculate PO status
       const [allPoItems] = await connection.execute(
         'SELECT quantity, received_qty FROM purchase_order_items WHERE purchase_order_id = ?',
@@ -1285,6 +1431,15 @@ class PurchaseRepository {
           WHERE purchase_order_id = ? AND menu_item_id = ?
         `, [qty, grn.purchase_order_id, item.menu_item_id]);
       }
+
+      // Link generated GRN serial numbers to the new Purchase Bill
+      await connection.execute(`
+        UPDATE product_serial_numbers
+        SET purchase_bill_id = ?,
+            purchase_invoice_number = ?,
+            purchase_date = ?
+        WHERE grn_id = ? AND restaurant_id = ?
+      `, [billId, bill_number || internalBillNumber, billDate, grnId, restaurantId]).catch(() => {});
 
       // Create supplier_ledger entry (PURCHASE_BILL increases payable)
       const outstanding = totalAmount - paid;

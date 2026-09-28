@@ -30,6 +30,7 @@ const dayEndRoutes = require('./routes/day_end_routes');
 const paymentReconciliationRoutes = require('./routes/payment_reconciliation_routes');
 const heldReceiptRoutes = require('./routes/held_receipt_routes');
 const customerReceivableRoutes = require('./routes/customer_receivable_routes');
+const serialNumberRoutes = require('./routes/serial_number_routes');
 
 const { apiLimiter, authLimiter } = require('./middlewares/rate_limiter_middleware');
 
@@ -40,8 +41,10 @@ const PORT = process.env.PORT || 5004;
 app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 
 // Security Middlewares
-// Dynamic Multi-Domain CORS Configuration (Supports arisoretail.duckdns.org & Localhost)
+// Dynamic Multi-Domain CORS Configuration (Supports retail.arisotechnologies.com, arisoretail.duckdns.org & Localhost)
 const defaultAllowedOrigins = [
+  'https://retail.arisotechnologies.com',
+  'http://retail.arisotechnologies.com',
   'https://arisoretail.duckdns.org',
   'http://arisoretail.duckdns.org',
   'http://localhost:3000',
@@ -70,7 +73,11 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    if (origin.endsWith('.duckdns.org') || origin.endsWith('.arisoretail.duckdns.org')) {
+    if (
+      origin.endsWith('.arisotechnologies.com') ||
+      origin.endsWith('.duckdns.org') ||
+      origin.endsWith('.arisoretail.duckdns.org')
+    ) {
       return callback(null, true);
     }
 
@@ -130,6 +137,7 @@ app.use('/api/day-end', dayEndRoutes);
 app.use('/api/payment-reconciliation', paymentReconciliationRoutes);
 app.use('/api/held-receipts', heldReceiptRoutes);
 app.use('/api/receivables', customerReceivableRoutes);
+app.use('/api/serial-numbers', serialNumberRoutes);
 
 const ThemeController = require('./controllers/theme_controller');
 app.get('/api/theme/config', ThemeController.getTheme);

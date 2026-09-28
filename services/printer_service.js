@@ -1,4 +1,5 @@
 const net = require('net');
+const os = require('os');
 const PrinterRepository = require('../repositories/printer_repository');
 const PrintQueueRepository = require('../repositories/print_queue_repository');
 const OrderRepository = require('../repositories/order_repository');
@@ -33,6 +34,182 @@ function formatReceiptDateTime(dateVal) {
 
 class PrinterService {
   /**
+   * Tests socket reachability for an IP & port
+   */
+  static testSocketReachability(ip, port = 9100, timeoutMs = 800) {
+    if (!ip) return Promise.resolve(false);
+    if (ip === '127.0.0.1' || ip === 'localhost') return Promise.resolve(true);
+
+    return new Promise((resolve) => {
+      const sock = new net.Socket();
+      sock.setTimeout(timeoutMs);
+      sock.connect(port, ip, () => {
+        sock.destroy();
+        resolve(true);
+      });
+      sock.on('error', () => { sock.destroy(); resolve(false); });
+      sock.on('timeout', () => { sock.destroy(); resolve(false); });
+    });
+  }
+
+  /**
+   * Automatically discovers thermal printers across all active IPv4 local network subnets on port 9100
+   */
+  static async discoverNetworkPrinters() {
+    const ifaces = os.networkInterfaces();
+    const subnets = new Set();
+
+    for (const name in ifaces) {
+      for (const iface of ifaces[name]) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          const parts = iface.address.split('.');
+          if (parts.length === 4) {
+            subnets.add(parts.slice(0, 3).join('.'));
+          }
+        }
+      }
+    }
+
+    const discovered = [];
+    const scanHost = (ip, port = 9100) => {
+      return new Promise((resolve) => {
+        const sock = new net.Socket();
+        sock.setTimeout(600);
+        sock.connect(port, ip, () => {
+          sock.setTimeout(800);
+          let modelName = 'LAN Thermal Printer';
+          try {
+            sock.write(Buffer.from([0x1D, 0x49, 0x43])); // Query device model via ESC/POS GS I 67
+          } catch (e) {}
+
+          sock.on('data', (data) => {
+            const raw = data.toString('utf-8').replace(/[\x00-\x1F\x7F_]/g, '').trim();
+            if (raw) modelName = raw;
+            sock.destroy();
+            discovered.push({
+              ip,
+              port,
+              name: modelName,
+              model: modelName,
+              type: 'lan',
+              paper_width: '80',
+              status: 'online'
+            });
+            resolve(true);
+          });
+
+          sock.on('timeout', () => {
+            sock.destroy();
+            discovered.push({
+              ip,
+              port,
+              name: modelName,
+              model: modelName,
+              type: 'lan',
+              paper_width: '80',
+              status: 'online'
+            });
+            resolve(true);
+          });
+        });
+
+        sock.on('error', () => { sock.destroy(); resolve(false); });
+        sock.on('timeout', () => { sock.destroy(); resolve(false); });
+      });
+    };
+
+    const scanTasks = [];
+    for (const prefix of subnets) {
+      for (let i = 1; i <= 254; i++) {
+        scanTasks.push(scanHost(`${prefix}.${i}`, 9100));
+      }
+    }
+
+    await Promise.all(scanTasks);
+    return discovered;
+  }
+
+  /**
+   * Auto-resolves printer for an outlet:
+   * 1. Checks existing DB printer reachability.
+   * 2. If unreachable (IP change / DHCP renewal), scans local network to find new printer IP and updates DB.
+   * 3. If no printer in DB, auto-discovers and registers the printer as default.
+   */
+  static async autoResolveAndSyncPrinter(restaurantId = 1) {
+    try {
+      const existingPrinters = await PrinterRepository.getAll(restaurantId);
+      let defaultPrinter = existingPrinters.find(p => (p.is_default_receipt === 1 || p.role === 'receipt') && (p.type === 'lan' || p.type === 'network' || !!p.ip_address))
+        || existingPrinters.find(p => p.type === 'lan' || p.type === 'network' || !!p.ip_address)
+        || existingPrinters[0]
+        || null;
+
+      if (defaultPrinter && defaultPrinter.ip_address) {
+        // Test reachability of current configured IP
+        const isReachable = await this.testSocketReachability(defaultPrinter.ip_address, defaultPrinter.port || 9100, 1000);
+        if (isReachable) {
+          if (defaultPrinter.status !== 'online') {
+            await PrinterRepository.updateStatus(defaultPrinter.id, restaurantId, 'online').catch(() => {});
+            defaultPrinter.status = 'online';
+          }
+          return defaultPrinter;
+        }
+
+        console.log(`[Printer Auto-Sync] Configured printer IP ${defaultPrinter.ip_address} unreachable. Scanning local Wi-Fi/LAN for dynamic IP changes...`);
+      }
+
+      // Run network auto-discovery across local Wi-Fi / subnet
+      const discoveredPrinters = await this.discoverNetworkPrinters();
+      if (discoveredPrinters.length > 0) {
+        const found = discoveredPrinters[0];
+        console.log(`[Printer Auto-Sync] Discovered dynamic LAN printer at ${found.ip}:${found.port} (${found.name})`);
+
+        if (defaultPrinter) {
+          // Dynamic IP change detected! Update printer record with new IP & name
+          await PrinterRepository.update(defaultPrinter.id, restaurantId, {
+            name: defaultPrinter.name && defaultPrinter.name !== 'LAN Thermal Printer' ? defaultPrinter.name : found.name,
+            type: 'lan',
+            ip_address: found.ip,
+            port: found.port || 9100,
+            paper_width: defaultPrinter.paper_width || '80',
+            character_encoding: defaultPrinter.character_encoding || 'UTF-8',
+            role: defaultPrinter.role || 'receipt',
+            is_default_receipt: 1,
+            is_default_kot: defaultPrinter.is_default_kot !== undefined ? defaultPrinter.is_default_kot : 1,
+            auto_cut: defaultPrinter.auto_cut !== undefined ? defaultPrinter.auto_cut : 1,
+            cash_drawer: defaultPrinter.cash_drawer !== undefined ? defaultPrinter.cash_drawer : 1,
+            is_active: 1,
+            status: 'online'
+          });
+          defaultPrinter = await PrinterRepository.getById(defaultPrinter.id, restaurantId);
+          return defaultPrinter;
+        } else {
+          // Register brand new auto-detected printer in database
+          const newPrinterId = await PrinterRepository.create(restaurantId, {
+            name: found.name || 'LAN Thermal Printer',
+            type: 'lan',
+            ip_address: found.ip,
+            port: found.port || 9100,
+            paper_width: '80',
+            character_encoding: 'UTF-8',
+            role: 'receipt',
+            is_default_receipt: 1,
+            is_default_kot: 1,
+            auto_cut: 1,
+            cash_drawer: 1
+          });
+          defaultPrinter = await PrinterRepository.getById(newPrinterId, restaurantId);
+          return defaultPrinter;
+        }
+      }
+
+      return defaultPrinter;
+    } catch (err) {
+      console.error('[Printer Auto-Sync Error]', err.message);
+      return null;
+    }
+  }
+
+  /**
    * Sends a raw in-memory Buffer payload directly to a network thermal printer TCP socket
    */
   static sendToPrinterSocket(ip, port, buffer) {
@@ -60,7 +237,7 @@ class PrinterService {
       }
 
       const client = new net.Socket();
-      client.setTimeout(2500); // Tight 2.5 second TCP connection timeout
+      client.setTimeout(3000); // 3.0 second TCP connection timeout for local LAN
 
       let tConnected = null;
       let tSent = null;
@@ -87,13 +264,14 @@ class PrinterService {
 
       client.on('error', (err) => {
         client.destroy();
-        reject(Object.assign(err, { tConnectionStarted, tFailed: Date.now() }));
+        const customErr = new Error(`Socket connection error (${err.code || err.message}) at ${ip}:${port || 9100}`);
+        reject(Object.assign(customErr, { code: err.code, tConnectionStarted, tFailed: Date.now() }));
       });
 
       client.on('timeout', () => {
         client.destroy();
-        const err = new Error(`TCP Socket timeout connecting to thermal printer at ${ip}:${port}`);
-        reject(Object.assign(err, { tConnectionStarted, tFailed: Date.now() }));
+        const err = new Error(`Connection timed out after 3.0s connecting to thermal printer at ${ip}:${port || 9100}`);
+        reject(Object.assign(err, { code: 'ETIMEDOUT', tConnectionStarted, tFailed: Date.now() }));
       });
     });
   }
@@ -356,9 +534,14 @@ class PrinterService {
       if (order.tax_type === 'inter') {
         cmds += PrinterService.formatTwoColumns('IGST Tax:', `Rs. ${taxVal.toFixed(2)}`, cols) + '\n';
       } else {
-        const halfTax = (taxVal / 2).toFixed(2);
-        cmds += PrinterService.formatTwoColumns('CGST Tax:', `Rs. ${halfTax}`, cols) + '\n';
-        cmds += PrinterService.formatTwoColumns('SGST Tax:', `Rs. ${halfTax}`, cols) + '\n';
+        const cgstVal = order.cgst_amount !== undefined && order.cgst_amount !== null
+          ? parseFloat(order.cgst_amount).toFixed(2)
+          : (taxVal / 2).toFixed(2);
+        const sgstVal = order.sgst_amount !== undefined && order.sgst_amount !== null
+          ? parseFloat(order.sgst_amount).toFixed(2)
+          : (taxVal / 2).toFixed(2);
+        cmds += PrinterService.formatTwoColumns('CGST Tax:', `Rs. ${cgstVal}`, cols) + '\n';
+        cmds += PrinterService.formatTwoColumns('SGST Tax:', `Rs. ${sgstVal}`, cols) + '\n';
         cmds += PrinterService.formatTwoColumns('Total Tax:', `Rs. ${taxVal.toFixed(2)}`, cols) + '\n';
       }
     }

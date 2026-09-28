@@ -3,6 +3,7 @@ const CustomerRepository = require('./customer_repository');
 const CustomerLedgerRepository = require('./customer_ledger_repository');
 const CustomerReceivableRepository = require('./customer_receivable_repository');
 const StockMovementService = require('../services/stock_movement_service');
+const SerialNumberService = require('../services/serial_number_service');
 const { GstService } = require('../services/gst_service');
 const FinancialAccountService = require('../services/financial_account_service');
 
@@ -378,15 +379,16 @@ class OrderRepository {
           const weightUnit = item.weight_unit || item.unit || null;
           const baseUnitPrice = item.base_unit_price !== undefined && item.base_unit_price !== null ? parseFloat(item.base_unit_price) : null;
           const barcode = item.barcode || null;
+          const serialNumber = item.serial_number || item.serialNumber || null;
 
           await connection.execute(
-            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, notes, delivered_qty, invoiced_qty, hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount) ' +
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, serial_number, notes, delivered_qty, invoiced_qty, hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
               orderId, menuItemId || null, item.name || item.item_name || 'Item', item.name || item.item_name || 'Item',
               item.unitPrice, item.unitPrice, item.gstRate,
               item.totalTax, item.discountAmount, itemQuantity,
-              itemWeight !== undefined ? itemWeight : null, weightUnit || null, baseUnitPrice !== undefined ? baseUnitPrice : null, barcode || null, item.notes || null,
+              itemWeight !== undefined ? itemWeight : null, weightUnit || null, baseUnitPrice !== undefined ? baseUnitPrice : null, barcode || null, serialNumber || null, item.notes || null,
               item.hsnCode || null, item.taxableAmount, item.cgstRate, item.cgstAmount, item.sgstRate, item.sgstAmount, item.igstRate, item.igstAmount
             ]
           );
@@ -463,6 +465,26 @@ class OrderRepository {
               console.warn('[Inventory Stock Update Warning]:', invErr.message);
               throw invErr;
             }
+          }
+        }
+
+        // Update product serial number history for sold items (completed retail orders / invoices)
+        if (orderStatus === 'completed' && isEstimateFlag !== 1) {
+          try {
+            await SerialNumberService.processOrderSale(connection, {
+              restaurantId,
+              orderId,
+              orderNumber: uniqueOrderNumber,
+              uniqueOrderNumber,
+              saleDate: new Date(),
+              customerId: resolvedCustomerId,
+              customerName: resolvedCustomerName,
+              customerPhone: resolvedCustomerPhone,
+              warehouseId: orderWarehouseId,
+              items: docTax.items
+            });
+          } catch (snErr) {
+            console.warn('[Serial Number Sale Link Warning]:', snErr.message);
           }
         }
 
@@ -689,8 +711,13 @@ class OrderRepository {
       params.push(warehouse_id);
     }
     if (order_status && order_status !== 'all') {
-      query += ' AND order_status = ?';
-      params.push(order_status);
+      if (order_status === 'pending' && (is_estimate === undefined || is_estimate === null || is_estimate === '')) {
+        query += ' AND order_status = ? AND (is_estimate = 0 OR is_estimate IS NULL)';
+        params.push(order_status);
+      } else {
+        query += ' AND order_status = ?';
+        params.push(order_status);
+      }
     }
     if (is_sales_order !== undefined && is_sales_order !== null && is_sales_order !== '') {
       query += ' AND is_sales_order = ?';
@@ -1205,13 +1232,13 @@ class OrderRepository {
 
       // 1. If items are provided, reconcile reserved stock
       if (items && Array.isArray(items)) {
-        // Fetch existing items to release their reserved stock
+        // Fetch existing items to release their reserved stock (sales orders only)
         const [oldItems] = await connection.execute(
           'SELECT menu_item_id, quantity, item_weight FROM order_items WHERE order_id = ?',
           [id]
         );
         for (const oldIt of oldItems) {
-          if (oldIt.menu_item_id) {
+          if (oldIt.menu_item_id && existingOrder.is_estimate !== 1) {
             const oldQty = oldIt.item_weight !== null ? parseFloat(oldIt.item_weight) : parseInt(oldIt.quantity);
             await connection.execute(
               'UPDATE menu_items SET reserved_stock = GREATEST(0, reserved_stock - ?) WHERE id = ? AND restaurant_id = ?',
@@ -1223,7 +1250,7 @@ class OrderRepository {
         // Delete old items
         await connection.execute('DELETE FROM order_items WHERE order_id = ?', [id]);
 
-        // Insert new items and reserve stock
+        // Insert new items and reserve stock (sales orders only)
         for (const item of items) {
           const itemPrice = isNaN(parseFloat(item.price)) ? 0.00 : parseFloat(item.price);
           const itemGstRate = isNaN(parseFloat(item.gst_rate)) ? 0.00 : parseFloat(item.gst_rate);
@@ -1255,7 +1282,7 @@ class OrderRepository {
             ]
           );
 
-          if (menuItemId) {
+          if (menuItemId && existingOrder.is_estimate !== 1) {
             await connection.execute(
               'UPDATE menu_items SET reserved_stock = reserved_stock + ? WHERE id = ? AND restaurant_id = ?',
               [soldQty, menuItemId, restaurantId]
