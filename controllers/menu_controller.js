@@ -1,5 +1,6 @@
 const MenuRepository = require('../repositories/menu_repository');
 const SuperAdminRepository = require('../repositories/superadmin_repository');
+const { notify: rtNotify } = require('../services/realtime_service');
 
 class MenuController {
   static async getAll(req, res) {
@@ -155,6 +156,7 @@ class MenuController {
 
       const itemId = await MenuRepository.create(restaurantId, itemData);
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'MENU_CREATE', `Created menu item: ${itemData.name} (ID: ${itemId})`, req.ip);
+      rtNotify.menuUpdated(restaurantId, { action: 'create', itemId, name: itemData.name });
 
       return res.status(201).json({ message: 'Menu item created successfully.', id: itemId });
     } catch (err) {
@@ -266,6 +268,7 @@ class MenuController {
       }
 
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'MENU_UPDATE', `Updated menu item: ${itemData.name} (ID: ${itemId})`, req.ip);
+      rtNotify.menuUpdated(restaurantId, { action: 'update', itemId, name: itemData.name });
       return res.json({ message: 'Menu item updated successfully.' });
     } catch (err) {
       console.error(err);
@@ -284,6 +287,7 @@ class MenuController {
       }
 
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'MENU_DELETE', `Deleted menu item (ID: ${itemId})`, req.ip);
+      rtNotify.menuUpdated(restaurantId, { action: 'delete', itemId });
       return res.json({ message: 'Menu item deleted successfully.' });
     } catch (err) {
       console.error(err);
@@ -301,7 +305,7 @@ class MenuController {
       const restaurantId = req.user.restaurant_id;
       await MenuRepository.updateSequence(restaurantId, sequences);
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'MENU_REORDER', `Reordered menu items`, req.ip);
-      
+      rtNotify.menuUpdated(restaurantId, { action: 'reorder' });
       return res.json({ message: 'Menu items sequence updated successfully.' });
     } catch (err) {
       console.error(err);

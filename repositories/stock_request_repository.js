@@ -202,8 +202,9 @@ class StockRequestRepository {
   /**
    * Review and approve/partially approve stock request
    */
-  static async approve(id, restaurantId, userId, userName, approvalData) {
-    const { items, approval_notes } = approvalData;
+  static async approve(id, restaurantId, userId, userName, approvalData = {}) {
+    const items = approvalData?.items || [];
+    const approval_notes = approvalData?.approval_notes || approvalData?.notes || null;
 
     const connection = await pool.getConnection();
 
@@ -219,16 +220,32 @@ class StockRequestRepository {
 
       const req = reqRows[0];
       if (req.status !== 'pending' && req.status !== 'draft') {
+        // If already approved or in progress, return current record without error
+        if (req.status === 'approved' || req.status === 'partially_approved' || req.status === 'transferred' || req.status === 'received' || req.status === 'partially_received') {
+          await connection.commit();
+          return this.getById(id, restaurantId);
+        }
         throw new Error(`Cannot approve request in "${req.status}" state.`);
       }
+
+      // Fetch existing line items to ensure valid IDs and requested quantities
+      const [existingItems] = await connection.execute(
+        'SELECT * FROM stock_request_items WHERE stock_request_id = ?',
+        [id]
+      );
 
       let allFull = true;
       let totalApproved = 0;
 
-      if (items && Array.isArray(items)) {
+      if (items && Array.isArray(items) && items.length > 0) {
         for (const it of items) {
-          const approvedQty = parseFloat(it.approved_qty) || 0;
-          const reqQty = parseFloat(it.requested_qty) || 0;
+          const targetId = it.id || it.item_id;
+          const matchingDbItem = existingItems.find(ei => ei.id === targetId || (it.menu_item_id && ei.menu_item_id === it.menu_item_id));
+
+          if (!matchingDbItem) continue;
+
+          const reqQty = parseFloat(it.requested_qty !== undefined ? it.requested_qty : matchingDbItem.requested_qty) || 0;
+          const approvedQty = Math.max(0, parseFloat(it.approved_qty) || 0);
           const rejectedQty = Math.max(0, reqQty - approvedQty);
 
           if (approvedQty < reqQty) allFull = false;
@@ -238,7 +255,18 @@ class StockRequestRepository {
             UPDATE stock_request_items 
             SET approved_qty = ?, rejected_qty = ?, notes = COALESCE(?, notes)
             WHERE id = ? AND stock_request_id = ?
-          `, [approvedQty, rejectedQty, it.notes || null, it.id, id]);
+          `, [approvedQty, rejectedQty, it.notes || null, matchingDbItem.id, id]);
+        }
+      } else {
+        // If no explicit items payload provided, approve all existing items in full
+        for (const ei of existingItems) {
+          const reqQty = parseFloat(ei.requested_qty || 0);
+          totalApproved += reqQty;
+          await connection.execute(`
+            UPDATE stock_request_items 
+            SET approved_qty = ?, rejected_qty = 0
+            WHERE id = ? AND stock_request_id = ?
+          `, [reqQty, ei.id, id]);
         }
       }
 
@@ -253,7 +281,7 @@ class StockRequestRepository {
           approval_notes = COALESCE(?, approval_notes),
           updated_at = NOW()
         WHERE id = ? AND restaurant_id = ?
-      `, [finalStatus, userId, userName, approval_notes || null, id, restaurantId]);
+      `, [finalStatus, userId, userName, approval_notes, id, restaurantId]);
 
       await connection.commit();
       return this.getById(id, restaurantId);

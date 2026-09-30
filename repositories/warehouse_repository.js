@@ -289,6 +289,28 @@ class WarehouseRepository {
       summary: summaryRows[0] || { total_items: 0, in_stock_count: 0, low_stock_count: 0, out_of_stock_count: 0, total_valuation: 0 }
     };
   }
+
+  /**
+   * Fetch item stock distribution across all active warehouses
+   */
+  static async getItemStockAcrossWarehouses(restaurantId, menuItemId) {
+    const [rows] = await pool.execute(`
+      SELECT 
+        w.id as warehouse_id,
+        w.name as warehouse_name,
+        w.code as warehouse_code,
+        w.is_default,
+        w.status,
+        COALESCE(ws.current_stock, 0.000) as current_stock,
+        COALESCE(ws.reserved_stock, 0.000) as reserved_stock,
+        GREATEST(0, COALESCE(ws.current_stock, 0.000) - COALESCE(ws.reserved_stock, 0.000)) as available_stock
+      FROM warehouses w
+      LEFT JOIN warehouse_stocks ws ON w.id = ws.warehouse_id AND ws.menu_item_id = ? AND ws.restaurant_id = w.restaurant_id
+      WHERE w.restaurant_id = ? AND w.status = 'active'
+      ORDER BY w.is_default DESC, w.name ASC
+    `, [menuItemId, restaurantId]);
+    return rows;
+  }
 }
 
 module.exports = WarehouseRepository;

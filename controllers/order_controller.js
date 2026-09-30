@@ -8,6 +8,7 @@ const PdfReceiptService = require('../services/pdf_receipt_service');
 const ReceiptRepository = require('../repositories/receipt_repository');
 const EmailService = require('../services/email_service');
 const { getISTDateString } = require('../utils/date_utils');
+const { notify: rtNotify } = require('../services/realtime_service');
 
 class OrderController {
   static async create(req, res) {
@@ -113,6 +114,14 @@ class OrderController {
         console.error('[Order Placement Print Enqueue Warning]:', pErr.message);
       }
 
+      // Real-time notification: order placed & stock updated
+      try {
+        rtNotify.orderUpdated(restaurantId, { action: 'create', orderId, orderNumber });
+        rtNotify.stockUpdated(restaurantId, { action: 'order_placed', orderId });
+      } catch (rtErr) {
+        console.error('[Realtime Notification Warning]:', rtErr.message);
+      }
+
       // Return immediately
       return res.status(201).json({
         message: isEstimateFlag ? 'Estimate saved successfully.' : 'Order placed successfully.',
@@ -201,6 +210,16 @@ class OrderController {
         PrinterService.enqueueOrderPrintJobs(restaurantId, req.params.id, print_actions);
       }
 
+      // Real-time notification: order status changed
+      try {
+        rtNotify.orderUpdated(restaurantId, { action: 'status_update', orderId: req.params.id, status });
+        if (status === 'completed' || status === 'cancelled') {
+          rtNotify.stockUpdated(restaurantId, { action: 'order_status_change', orderId: req.params.id, status });
+        }
+      } catch (rtErr) {
+        console.error('[Realtime Notification Warning]:', rtErr.message);
+      }
+
       return res.json({ message: 'Order status updated successfully.' });
     } catch (err) {
       console.error(err);
@@ -239,6 +258,14 @@ class OrderController {
         PrinterService.enqueueOrderPrintJobs(restaurantId, req.params.id, print_actions);
       } catch (pErr) {
         console.warn('[Order Confirm Print Enqueue Warning]:', pErr.message);
+      }
+
+      // Real-time notification: order confirmed & stock updated
+      try {
+        rtNotify.orderUpdated(restaurantId, { action: 'confirm', orderId: result.orderId, orderNumber: result.orderNumber });
+        rtNotify.stockUpdated(restaurantId, { action: 'order_confirmed', orderId: result.orderId });
+      } catch (rtErr) {
+        console.error('[Realtime Notification Warning]:', rtErr.message);
       }
 
       return res.json({

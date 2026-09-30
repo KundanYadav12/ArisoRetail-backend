@@ -1,5 +1,6 @@
 const CategoryRepository = require('../repositories/category_repository');
 const SuperAdminRepository = require('../repositories/superadmin_repository');
+const { notify: rtNotify } = require('../services/realtime_service');
 
 class CategoryController {
   static async getAll(req, res) {
@@ -37,7 +38,7 @@ class CategoryController {
       const restaurantId = req.user.restaurant_id;
       const categoryId = await CategoryRepository.create(restaurantId, { name, description, seq });
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'CATEGORY_CREATE', `Created category: ${name} (ID: ${categoryId})`, req.ip);
-      
+      rtNotify.categoryUpdated(restaurantId, { action: 'create', categoryId, name });
       return res.status(201).json({ message: 'Category created successfully.', id: categoryId });
     } catch (err) {
       console.error(err);
@@ -58,7 +59,7 @@ class CategoryController {
         return res.status(404).json({ error: 'Category not found or unauthorized.' });
       }
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'CATEGORY_UPDATE', `Updated category: ${name} (ID: ${req.params.id})`, req.ip);
-      
+      rtNotify.categoryUpdated(restaurantId, { action: 'update', categoryId: req.params.id, name });
       return res.json({ message: 'Category updated successfully.' });
     } catch (err) {
       console.error(err);
@@ -74,7 +75,7 @@ class CategoryController {
         return res.status(404).json({ error: 'Category not found or unauthorized.' });
       }
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'CATEGORY_DELETE', `Deleted category (ID: ${req.params.id})`, req.ip);
-      
+      rtNotify.categoryUpdated(restaurantId, { action: 'delete', categoryId: req.params.id });
       return res.json({ message: 'Category deleted successfully.' });
     } catch (err) {
       console.error(err);

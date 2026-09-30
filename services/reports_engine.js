@@ -1,6 +1,8 @@
 const pool = require('../config/db');
 const ExcelJS = require('exceljs');
 const { getISTDateString, formatLocalDate } = require('../utils/date_utils');
+const FinancialReportsEngine = require('./financial_reports_engine');
+const InventoryReportsEngine = require('./inventory_reports_engine');
 
 class ReportsEngine {
   /**
@@ -371,99 +373,278 @@ class ReportsEngine {
         ]
       },
 
-      // 3. INVENTORY
+      // 3. INVENTORY (15 Dynamic Inventory Reports)
       {
-        id: 'inventory_current_stock',
-        title: 'Current Stock',
+        id: 'inventory_valuation_summary',
+        title: 'Inventory Valuation Summary',
         category: 'inventory',
-        description: 'Live warehouse stock balances, unit costs, total stock valuation, and stock statuses.',
+        description: 'Item-level stock on hand, valuation rates, brands, HSN/SAC, and total asset value.',
+        columns: [
+          { key: 'item_name', header: 'Item', width: 25 },
+          { key: 'category_name', header: 'Category Name', width: 18 },
+          { key: 'group_name', header: 'Group Name', width: 16 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'brand', header: 'Brand', width: 14 },
+          { key: 'hsn_sac', header: 'HSN/SAC', width: 12 },
+          { key: 'stock_on_hand', header: 'Stock On Hand', width: 14, align: 'right' },
+          { key: 'unit', header: 'Unit', width: 10 },
+          { key: 'rate', header: 'Rate (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'asset_value', header: 'Inventory Asset Value (₹)', width: 20, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'inventory_godown_summary',
+        title: 'Godown Summary',
+        category: 'inventory',
+        description: 'Stock quantity, average rate, and total inventory value grouped by warehouse / godown.',
+        columns: [
+          { key: 'godown_name', header: 'Godown Name', width: 25 },
+          { key: 'item_count', header: 'Item Count', width: 12, align: 'right' },
+          { key: 'quantity', header: 'Quantity', width: 14, align: 'right' },
+          { key: 'rate', header: 'Rate (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'amount', header: 'Amount (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'inventory_categorywise_summary',
+        title: 'Categorywise Summary',
+        category: 'inventory',
+        description: 'Inventory quantity, valuation rate, and asset value aggregated by product category.',
+        columns: [
+          { key: 'category_name', header: 'Categories Name', width: 25 },
+          { key: 'item_count', header: 'Item Count', width: 12, align: 'right' },
+          { key: 'quantity', header: 'Quantity', width: 14, align: 'right' },
+          { key: 'rate', header: 'Rate (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'amount', header: 'Amount (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'inventory_category_mis',
+        title: 'Category-wise MIS Report',
+        category: 'inventory',
+        description: 'Comparative purchase cost, MRP potential, tax split, and sales revenue by category.',
+        columns: [
+          { key: 'category_name', header: 'Category Name', width: 22 },
+          { key: 'purchase_qty', header: 'Purchase Qty', width: 14, align: 'right' },
+          { key: 'purchase_cost', header: 'Purchase Cost (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'purchase_selling', header: 'Purchase Selling (₹)', width: 18, align: 'right', isCurrency: true },
+          { key: 'purchase_mrp', header: 'Purchase MRP (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'purchase_taxable_amount', header: 'Purchase Taxable (₹)', width: 18, align: 'right', isCurrency: true },
+          { key: 'purchase_tax_amount', header: 'Purchase Tax (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'purchase_total_amount', header: 'Purchase Total (₹)', width: 18, align: 'right', isCurrency: true },
+          { key: 'sales_qty', header: 'Sales Qty', width: 12, align: 'right' },
+          { key: 'sales_revenue', header: 'Sales Revenue (₹)', width: 16, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'inventory_groupwise_summary',
+        title: 'Groupwise Summary',
+        category: 'inventory',
+        description: 'Inventory valuation and item quantities grouped dynamically by product group.',
+        columns: [
+          { key: 'group_name', header: 'Group Name', width: 22 },
+          { key: 'item_count', header: 'Item Count', width: 12, align: 'right' },
+          { key: 'quantity', header: 'Quantity', width: 14, align: 'right' },
+          { key: 'rate', header: 'Rate (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'amount', header: 'Amount (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'inventory_negative_stock',
+        title: 'Inventory Negative Stock Detail',
+        category: 'inventory',
+        description: 'Audit log of items with deficit stock (< 0) and calculated valuation deficits.',
+        columns: [
+          { key: 'item_name', header: 'Item', width: 25 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'category_name', header: 'Category Name', width: 18 },
+          { key: 'group_name', header: 'Group Name', width: 16 },
+          { key: 'warehouse_name', header: 'Godown', width: 16 },
+          { key: 'negative_stock_qty', header: 'Negative Stock Qty', width: 16, align: 'right' },
+          { key: 'unit', header: 'Unit', width: 10 },
+          { key: 'rate', header: 'Rate (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'deficit_value', header: 'Deficit Value (₹)', width: 16, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'inventory_fifo_lot_tracking',
+        title: 'FIFO Cost Lot Tracking',
+        category: 'inventory',
+        description: 'First-in-first-out cost lot tracking from opening lots and purchases to sales consumption.',
+        columns: [
+          { key: 'lot_date', header: 'Lot Date', width: 18 },
+          { key: 'item_name', header: 'Item Name', width: 22 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'lot_ref', header: 'Lot Reference', width: 16 },
+          { key: 'source_type', header: 'Source Type', width: 16 },
+          { key: 'inward_qty', header: 'Inward Qty', width: 12, align: 'right' },
+          { key: 'unit_cost', header: 'Unit Cost (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'consumed_qty', header: 'Consumed Qty', width: 14, align: 'right' },
+          { key: 'balance_qty', header: 'Balance Qty', width: 12, align: 'right' },
+          { key: 'balance_value', header: 'Balance Value (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'lot_status', header: 'Lot Status', width: 16 }
+        ]
+      },
+      {
+        id: 'inventory_stock_summary',
+        title: 'Stock Summary Report',
+        category: 'inventory',
+        description: 'Dynamic stock balance movements (Opening, Inward, Outward, Closing) with variance tracking.',
+        columns: [
+          { key: 'item_name', header: 'Item Name', width: 22 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'unit', header: 'Unit', width: 8 },
+          { key: 'opening', header: 'Opening', width: 10, align: 'right' },
+          { key: 'purchase', header: 'Purchase', width: 10, align: 'right' },
+          { key: 'transfer_in', header: 'Transfer IN', width: 12, align: 'right' },
+          { key: 'excess', header: 'Excess', width: 10, align: 'right' },
+          { key: 'production', header: 'Production', width: 10, align: 'right' },
+          { key: 'total_in', header: 'Total IN', width: 12, align: 'right' },
+          { key: 'sales', header: 'Sales', width: 10, align: 'right' },
+          { key: 'transfer_out', header: 'Transfer Out', width: 12, align: 'right' },
+          { key: 'shortage', header: 'Shortage', width: 10, align: 'right' },
+          { key: 'consumption', header: 'Consumption', width: 12, align: 'right' },
+          { key: 'total_out', header: 'Total OUT', width: 12, align: 'right' },
+          { key: 'closing_stock', header: 'Closing Stock', width: 12, align: 'right' },
+          { key: 'closing_summary', header: 'Closing Summary', width: 14, align: 'right' },
+          { key: 'difference', header: 'Difference', width: 12, align: 'right' }
+        ]
+      },
+      {
+        id: 'inventory_highest_selling',
+        title: 'Highest Selling Items',
+        category: 'inventory',
+        description: 'Top revenue and volume items calculated from actual completed sales transactions.',
+        columns: [
+          { key: 'item_name', header: 'Item Name', width: 22 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'category_name', header: 'Category', width: 16 },
+          { key: 'group_name', header: 'Group', width: 14 },
+          { key: 'qty_sold', header: 'Quantity Sold', width: 14, align: 'right' },
+          { key: 'total_sales', header: 'Gross Sales (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'discount_amount', header: 'Discount (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'net_sales', header: 'Net Sales (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'avg_rate', header: 'Avg Rate (₹)', width: 14, align: 'right', isCurrency: true },
+          { key: 'orders_count', header: 'Orders Count', width: 12, align: 'right' }
+        ]
+      },
+      {
+        id: 'inventory_least_selling',
+        title: 'Least Selling Items',
+        category: 'inventory',
+        description: 'Slow-moving and zero-sales items with days of inactivity and remaining stock.',
+        columns: [
+          { key: 'item_name', header: 'Item Name', width: 22 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'category_name', header: 'Category', width: 16 },
+          { key: 'group_name', header: 'Group', width: 14 },
+          { key: 'current_stock', header: 'Current Stock', width: 14, align: 'right' },
+          { key: 'qty_sold', header: 'Quantity Sold', width: 14, align: 'right' },
+          { key: 'total_sales', header: 'Total Sales (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'last_sold_date', header: 'Last Sold Date', width: 16 },
+          { key: 'days_inactive', header: 'Inactivity Period', width: 16 }
+        ]
+      },
+      {
+        id: 'inventory_batch_wise',
+        title: 'Batch-wise Item',
+        category: 'inventory',
+        description: 'Batch-tracked stock levels, locations, manufacturing, expiry status, and batch valuation.',
+        columns: [
+          { key: 'item_name', header: 'Item Name', width: 22 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'unit', header: 'Unit', width: 8 },
+          { key: 'category_name', header: 'Category Name', width: 16 },
+          { key: 'group_name', header: 'Group Name', width: 14 },
+          { key: 'batch_name', header: 'Batch Name', width: 14 },
+          { key: 'location_name', header: 'Location Name', width: 16 },
+          { key: 'expiry_status', header: 'Expiry Status', width: 14 },
+          { key: 'expiry_date', header: 'Expiry Date', width: 14 },
+          { key: 'mrp', header: 'MRP (₹)', width: 12, align: 'right', isCurrency: true },
+          { key: 'batch_purchase_price', header: 'Batch Purchase Price (₹)', width: 18, align: 'right', isCurrency: true },
+          { key: 'batch_sales_price', header: 'Batch Sales Price (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'current_stock', header: 'Current Stock', width: 14, align: 'right' },
+          { key: 'stock_value', header: 'Stock Value (₹)', width: 16, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'inventory_item_stock_levels',
+        title: 'Item Stock Levels',
+        category: 'inventory',
+        description: 'Current inventory vs min/par stock ratios, reorder quantity, run-out velocity, and alert levels.',
+        columns: [
+          { key: 'item_name', header: 'Item Name', width: 22 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'unit', header: 'Unit', width: 8 },
+          { key: 'category', header: 'Category', width: 16 },
+          { key: 'group', header: 'Group', width: 14 },
+          { key: 'location', header: 'Location', width: 14 },
+          { key: 'stock_status', header: 'Stock Status', width: 14 },
+          { key: 'alert_level', header: 'Alert Level', width: 12 },
+          { key: 'current_stock', header: 'Current Stock', width: 14, align: 'right' },
+          { key: 'min_stock', header: 'Minimum Stock', width: 14, align: 'right' },
+          { key: 'min_stock_ratio', header: 'Min Stock Ratio', width: 14, align: 'right' },
+          { key: 'par_stock', header: 'Par Stock', width: 12, align: 'right' },
+          { key: 'par_stock_ratio', header: 'Par Stock Ratio', width: 14, align: 'right' },
+          { key: 'reorder_qty', header: 'Reorder Quantity', width: 14, align: 'right' },
+          { key: 'reorder_value', header: 'Reorder Value (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'days_remaining', header: 'Days Of Stock Remaining', width: 20 },
+          { key: 'stock_value', header: 'Stock Value (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'rate', header: 'Rate (₹)', width: 14, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'inventory_reorder_suggestions',
+        title: 'Item Reorder Suggestions',
+        category: 'inventory',
+        description: 'Actionable procurement suggestions based on live warehouse stock, par thresholds, shortfall and consumption velocity.',
+        columns: [
+          { key: 'item_name', header: 'Item Name', width: 22 },
+          { key: 'item_code', header: 'Item Code', width: 14 },
+          { key: 'unit', header: 'Unit', width: 10 },
+          { key: 'category_name', header: 'Category Name', width: 18 },
+          { key: 'group_name', header: 'Group Name', width: 16 },
+          { key: 'location_name', header: 'Location Name', width: 16 },
+          { key: 'current_stock', header: 'Current Stock', width: 14, align: 'right' },
+          { key: 'min_stock', header: 'Minimum Stock', width: 14, align: 'right' },
+          { key: 'par_stock', header: 'Par Stock', width: 14, align: 'right' },
+          { key: 'suggested_order_qty', header: 'Suggested Order Quantity', width: 20, align: 'right' },
+          { key: 'purchase_rate', header: 'Purchase Rate (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'order_value', header: 'Order Value (₹)', width: 16, align: 'right', isCurrency: true },
+          { key: 'urgency', header: 'Urgency', width: 12 },
+          { key: 'reason', header: 'Reason', width: 20 },
+          { key: 'days_until_stockout', header: 'Days Until Stockout', width: 18 },
+          { key: 'stock_shortfall', header: 'Stock Shortfall', width: 14, align: 'right' }
+        ]
+      },
+      {
+        id: 'inventory_reserved_stock',
+        title: 'Reserved Stock Report',
+        category: 'inventory',
+        description: 'Active stock earmarked against confirmed open sales orders, excluding non-binding estimates.',
         columns: [
           { key: 'item_name', header: 'Item Name', width: 25 },
-          { key: 'sku', header: 'SKU', width: 14 },
+          { key: 'brand', header: 'Brand', width: 16 },
           { key: 'category_name', header: 'Category', width: 18 },
-          { key: 'warehouse_name', header: 'Warehouse', width: 18 },
-          { key: 'current_stock', header: 'Current Stock', width: 14, align: 'right' },
           { key: 'unit', header: 'Unit', width: 10 },
-          { key: 'cost_price', header: 'Avg Cost (₹)', width: 14, align: 'right', isCurrency: true },
-          { key: 'stock_value', header: 'Stock Value (₹)', width: 16, align: 'right', isCurrency: true },
-          { key: 'min_stock', header: 'Min Stock', width: 12, align: 'right' },
-          { key: 'stock_status', header: 'Status', width: 14 }
+          { key: 'reserved_qty', header: 'Reserved Qty', width: 14, align: 'right' },
+          { key: 'reserved_value', header: 'Reserved Value (₹)', width: 18, align: 'right', isCurrency: true }
         ]
       },
       {
-        id: 'inventory_stock_ledger',
-        title: 'Stock Ledger (Movements)',
+        id: 'inventory_challan_invoice_variance',
+        title: 'Delivery Challan to Invoice Variance Report',
         category: 'inventory',
-        description: 'Auditable stock ledger tracking every transaction (SALE, PURCHASE, RETURN, ADJUSTMENT).',
+        description: 'Audit reconciliation comparing dispatched quantities on delivery challans against billed sales invoices.',
         columns: [
-          { key: 'created_at', header: 'Date & Time', width: 18 },
-          { key: 'item_name', header: 'Item Name', width: 22 },
-          { key: 'warehouse_name', header: 'Warehouse', width: 16 },
-          { key: 'transaction_type', header: 'Transaction Type', width: 18 },
-          { key: 'reference_number', header: 'Reference', width: 18 },
-          { key: 'previous_stock', header: 'Opening', width: 12, align: 'right' },
-          { key: 'qty_in', header: 'IN', width: 10, align: 'right' },
-          { key: 'qty_out', header: 'OUT', width: 10, align: 'right' },
-          { key: 'new_stock', header: 'Closing', width: 12, align: 'right' },
-          { key: 'user_name', header: 'User', width: 16 }
-        ]
-      },
-      {
-        id: 'inventory_stock_valuation',
-        title: 'Stock Valuation',
-        category: 'inventory',
-        description: 'Inventory valuation by warehouse and category using authoritative cost prices.',
-        columns: [
-          { key: 'item_name', header: 'Product', width: 25 },
-          { key: 'category_name', header: 'Category', width: 18 },
-          { key: 'warehouse_name', header: 'Warehouse', width: 18 },
-          { key: 'quantity', header: 'Stock Qty', width: 14, align: 'right' },
-          { key: 'unit_cost', header: 'Unit Cost (₹)', width: 14, align: 'right', isCurrency: true },
-          { key: 'total_value', header: 'Total Value (₹)', width: 18, align: 'right', isCurrency: true }
-        ]
-      },
-      {
-        id: 'inventory_low_stock',
-        title: 'Low Stock Report',
-        category: 'inventory',
-        description: 'Products that have fallen below minimum threshold with suggested reorder quantities.',
-        columns: [
-          { key: 'item_name', header: 'Product', width: 25 },
-          { key: 'sku', header: 'SKU', width: 14 },
-          { key: 'category_name', header: 'Category', width: 18 },
-          { key: 'current_stock', header: 'Current Stock', width: 14, align: 'right' },
-          { key: 'min_stock', header: 'Min Level', width: 12, align: 'right' },
-          { key: 'reorder_level', header: 'Reorder Level', width: 14, align: 'right' },
-          { key: 'suggested_reorder', header: 'Suggested Reorder', width: 16, align: 'right' }
-        ]
-      },
-      {
-        id: 'inventory_out_of_stock',
-        title: 'Out of Stock Report',
-        category: 'inventory',
-        description: 'All active catalog items currently depleted to zero inventory.',
-        columns: [
-          { key: 'item_name', header: 'Product', width: 25 },
-          { key: 'sku', header: 'SKU', width: 14 },
-          { key: 'category_name', header: 'Category', width: 18 },
-          { key: 'current_stock', header: 'Stock Qty', width: 12, align: 'right' },
-          { key: 'min_stock', header: 'Min Level', width: 12, align: 'right' }
-        ]
-      },
-      {
-        id: 'inventory_adjustments',
-        title: 'Stock Adjustment Report',
-        category: 'inventory',
-        description: 'Physical inventory corrections and manual adjustments with reasons and timestamps.',
-        columns: [
-          { key: 'created_at', header: 'Date', width: 18 },
-          { key: 'item_name', header: 'Product', width: 22 },
-          { key: 'warehouse_name', header: 'Warehouse', width: 16 },
-          { key: 'previous_stock', header: 'Before Qty', width: 12, align: 'right' },
-          { key: 'adjustment_qty', header: 'Adjustment Qty', width: 14, align: 'right' },
-          { key: 'new_stock', header: 'After Qty', width: 12, align: 'right' },
-          { key: 'reason', header: 'Reason / Notes', width: 22 },
-          { key: 'user_name', header: 'Adjusted By', width: 16 }
+          { key: 'dc_no', header: 'DC No.', width: 18 },
+          { key: 'dc_date', header: 'DC Date', width: 14 },
+          { key: 'invoice_no', header: 'Invoice No.', width: 18 },
+          { key: 'party_name', header: 'Party Name', width: 22 },
+          { key: 'dc_qty', header: 'DC Qty', width: 12, align: 'right' },
+          { key: 'invoiced_qty', header: 'Invoiced Qty', width: 12, align: 'right' },
+          { key: 'variance_qty', header: 'Variance Qty', width: 14, align: 'right' },
+          { key: 'variance_type', header: 'Variance Type', width: 16 }
         ]
       },
 
@@ -659,6 +840,76 @@ class ReportsEngine {
           { key: 'tax_amount', header: 'GST Tax (₹)', width: 14, align: 'right', isCurrency: true },
           { key: 'total_amount', header: 'Total Spent (₹)', width: 18, align: 'right', isCurrency: true }
         ]
+      },
+
+      // 12. FINANCIAL & ACCOUNTING REPORTS
+      {
+        id: 'financial_pl_t',
+        title: 'Profit & Loss — T Format',
+        category: 'financial',
+        description: 'Standard 2-column Trading and P&L statement (Purchase Accounts & Stock Adjustment vs Sales Accounts).',
+        columns: [
+          { key: 'left_item', header: 'Debit / Expenditure Accounts', width: 28 },
+          { key: 'left_amount', header: 'Debit Amount (₹)', width: 18, align: 'right', isCurrency: true },
+          { key: 'right_item', header: 'Credit / Income Accounts', width: 28 },
+          { key: 'right_amount', header: 'Credit Amount (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'financial_pl_statement',
+        title: 'Profit & Loss Statement',
+        category: 'financial',
+        description: 'Multi-step Trading Account & Income Statement showing Gross Profit b/f, Operating Incomes & Expenses, and Net Profit.',
+        columns: [
+          { key: 'section', header: 'Statement Head', width: 22 },
+          { key: 'item', header: 'Particulars', width: 30 },
+          { key: 'amount', header: 'Amount (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'financial_pl_simple',
+        title: 'Profit & Loss — Simple',
+        category: 'financial',
+        description: 'Single-stream +/- arithmetic calculation of Gross Profit and Net Profit including tax payable/receivable components.',
+        columns: [
+          { key: 'operation', header: 'Op', width: 6, align: 'center' },
+          { key: 'particulars', header: 'Particulars', width: 32 },
+          { key: 'amount', header: 'Amount (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'financial_cash_flow',
+        title: 'Cash Flow Statement',
+        category: 'financial',
+        description: 'Inflows and outflows across Operating, Investing, and Financing activities reconciling Cash & Bank balances.',
+        columns: [
+          { key: 'category', header: 'Activity Classification', width: 22 },
+          { key: 'particular', header: 'Particulars / Cash Head', width: 32 },
+          { key: 'amount', header: 'Net Cash Flow (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'financial_balance_sheet_t',
+        title: 'Balance Sheet — T Format',
+        category: 'financial',
+        description: 'Two-column audited financial position statement (Capital & Current Liabilities vs Current Assets).',
+        columns: [
+          { key: 'liability_item', header: 'Capital & Liabilities', width: 28 },
+          { key: 'liability_amount', header: 'Amount (₹)', width: 18, align: 'right', isCurrency: true },
+          { key: 'asset_item', header: 'Assets', width: 28 },
+          { key: 'asset_amount', header: 'Amount (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
+      },
+      {
+        id: 'financial_balance_sheet_single',
+        title: 'Balance Sheet — Single Column',
+        category: 'financial',
+        description: 'Vertical stacked Balance Sheet (Assets → Current Assets → Liabilities & Equity → Capital Account → Current Liabilities).',
+        columns: [
+          { key: 'group', header: 'Group', width: 20 },
+          { key: 'item', header: 'Particulars', width: 32 },
+          { key: 'amount', header: 'Amount (₹)', width: 18, align: 'right', isCurrency: true }
+        ]
       }
     ];
   }
@@ -690,6 +941,46 @@ class ReportsEngine {
 
     // Enforce Tenant Scoping: Superadmin can optionally filter by restaurantId, otherwise bound to user.restaurant_id
     const effectiveRestId = (user.role === 'super_admin' || user.role === 'superadmin') && branchId ? branchId : restaurantId;
+
+    // Delegate Financial Statements directly to Authoritative Financial Reports Engine
+    if (reportId.startsWith('financial_')) {
+      const financialResult = await FinancialReportsEngine.getSingleReport(effectiveRestId, reportId, {
+        preset,
+        dateFrom,
+        dateTo
+      });
+      return {
+        reportId,
+        title: financialResult.title,
+        dateRange: financialResult.dateRange || { from, to, label, preset },
+        pagination: {
+          page: 1,
+          limit: (financialResult.rows || []).length || 50,
+          totalCount: (financialResult.rows || []).length,
+          totalPages: 1
+        },
+        summary: financialResult.summary || {},
+        reconciliation: financialResult.reconciliation || null,
+        structuredData: financialResult.structuredData || null,
+        rows: financialResult.rows || []
+      };
+    }
+
+    // Delegate Inventory Reports directly to Authoritative Inventory Reports Engine
+    if (reportId.startsWith('inventory_')) {
+      return await InventoryReportsEngine.runInventoryReport(effectiveRestId, reportId, {
+        preset,
+        dateFrom,
+        dateTo,
+        page: parsedPage,
+        limit: parsedLimit,
+        search,
+        warehouseId,
+        categoryId,
+        sortBy,
+        sortOrder
+      }, user);
+    }
 
     let rows = [];
     let totalCount = 0;
@@ -1923,6 +2214,105 @@ class ReportsEngine {
       selectedFields,
       rowCount: rows.length,
       rows
+    };
+  }
+
+  /**
+   * Universal Report Exporter (Excel & CSV)
+   */
+  static async exportReport(restaurantId, reportId, format = 'excel', options = {}, user = {}) {
+    const reportData = await this.runReport(restaurantId, reportId, { ...options, page: 1, limit: 10000 }, user);
+    const catalog = this.getCatalog();
+    const meta = catalog.find(c => c.id === reportId) || {
+      title: reportId.replace(/_/g, ' ').toUpperCase(),
+      columns: []
+    };
+
+    const columns = meta.columns || [];
+    const rows = reportData.rows || [];
+
+    if (format === 'csv') {
+      const headerRow = columns.map(c => `"${(c.header || c.key).replace(/"/g, '""')}"`).join(',');
+      const dataRows = rows.map(r => {
+        return columns.map(c => {
+          let val = r[c.key];
+          if (val === undefined || val === null) val = '';
+          return `"${String(val).replace(/"/g, '""')}"`;
+        }).join(',');
+      });
+      const csvContent = [headerRow, ...dataRows].join('\r\n');
+      return {
+        buffer: Buffer.from(csvContent, 'utf-8'),
+        contentType: 'text/csv; charset=utf-8',
+        filename: `${reportId}_${Date.now()}.csv`
+      };
+    }
+
+    // Default: Excel (.xlsx) using ExcelJS
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Ariso Retail POS Engine';
+    workbook.created = new Date();
+
+    const cleanTitle = (meta.title || reportId).replace(/[/\\?*[\]]/g, ' ').slice(0, 31);
+    const sheet = workbook.addWorksheet(cleanTitle);
+
+    // Title Row
+    sheet.mergeCells(1, 1, 1, Math.max(columns.length, 4));
+    const titleCell = sheet.getCell(1, 1);
+    titleCell.value = `${meta.title} — Ariso Retail`;
+    titleCell.font = { name: 'Calibri', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'left' };
+    sheet.getRow(1).height = 30;
+
+    // Subtitle Row
+    sheet.mergeCells(2, 1, 2, Math.max(columns.length, 4));
+    const subCell = sheet.getCell(2, 1);
+    subCell.value = `Period: ${reportData.dateRange?.label || 'All Time'} | Generated: ${new Date().toLocaleString()}`;
+    subCell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: 'FF475569' } };
+    subCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+    sheet.getRow(2).height = 20;
+
+    // Header Row (Row 4)
+    const headerRow = sheet.getRow(4);
+    columns.forEach((col, idx) => {
+      const cell = headerRow.getCell(idx + 1);
+      cell.value = col.header || col.key;
+      cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+      cell.alignment = { vertical: 'middle', horizontal: col.align || 'left' };
+    });
+    headerRow.height = 24;
+
+    // Data Rows (Row 5+)
+    rows.forEach((r, rIdx) => {
+      const row = sheet.getRow(rIdx + 5);
+      columns.forEach((col, cIdx) => {
+        const cell = row.getCell(cIdx + 1);
+        let val = r[col.key];
+        if (col.isCurrency && val !== undefined && val !== null) {
+          cell.value = parseFloat(val) || 0;
+          cell.numFmt = '₹#,##0.00';
+        } else if (typeof val === 'number') {
+          cell.value = val;
+        } else {
+          cell.value = val !== undefined && val !== null ? String(val) : '';
+        }
+        cell.alignment = { vertical: 'middle', horizontal: col.align || 'left' };
+      });
+      row.height = 20;
+    });
+
+    // Auto-fit column widths
+    columns.forEach((col, idx) => {
+      sheet.getColumn(idx + 1).width = Math.max(col.width || 15, 12);
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return {
+      buffer,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      filename: `${reportId}_${Date.now()}.xlsx`
     };
   }
 }

@@ -14,6 +14,7 @@ router.use(enforceWarehouseScope);
 router.get('/report/export-excel', requirePermission('inventory_catalog'), InventoryController.exportStockExcel);
 router.get('/report/export-csv', requirePermission('inventory_catalog'), InventoryController.exportStockCSV);
 router.get('/report', requirePermission('inventory_catalog'), InventoryController.getStockReport);
+router.get('/items/:id/warehouse-stocks', requirePermission('inventory_catalog'), InventoryController.getItemStockAcrossWarehouses);
 router.post('/adjust', requirePermission('stock_adjustment'), InventoryController.adjustStock);
 router.get('/logs', requirePermission('stock_ledger'), InventoryController.getStockLogs);
 

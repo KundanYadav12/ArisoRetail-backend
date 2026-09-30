@@ -1,5 +1,6 @@
 const ReportRepository = require('../repositories/report_repository');
 const ReportsEngine = require('../services/reports_engine');
+const FinancialReportsEngine = require('../services/financial_reports_engine');
 const pool = require('../config/db');
 const { generateExcelWorkbook, generateGstSlabExcelWorkbook } = require('../utils/excel_helper');
 const { getISTDateString, formatLocalDate } = require('../utils/date_utils');
@@ -512,6 +513,28 @@ class ReportController {
     } catch (err) {
       console.error('[Yearly Rollup Error]', err);
       return res.status(500).json({ error: 'Failed to retrieve yearly rollup.' });
+    }
+  }
+
+  /**
+   * Financial Overview: All 6 statements (P&L T-Format, P&L Statement, P&L Simple, Cash Flow, Balance Sheet T-Format, Balance Sheet Single Column)
+   */
+  static async getFinancialOverview(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const branchId = req.query.branch_id;
+      const effectiveRestId = (req.user.role === 'super_admin' || req.user.role === 'superadmin') && branchId ? branchId : restaurantId;
+      const options = {
+        preset: req.query.preset || 'month',
+        dateFrom: req.query.date_from || '',
+        dateTo: req.query.date_to || ''
+      };
+
+      const overview = await FinancialReportsEngine.getFinancialOverview(effectiveRestId, options);
+      return res.json({ success: true, ...overview });
+    } catch (err) {
+      console.error('[Financial Overview Error]', err);
+      return res.status(500).json({ error: err.message || 'Failed to generate financial overview.' });
     }
   }
 

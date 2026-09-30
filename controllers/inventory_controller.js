@@ -10,6 +10,7 @@ const { generateExcelWorkbook } = require('../utils/excel_helper');
 const { getISTDateString, formatLocalDate } = require('../utils/date_utils');
 const { generatePurchaseBillPDF, fetchFullBill, fetchBranding } = require('../services/purchase_bill_pdf_service');
 const nodemailer = require('nodemailer');
+const { notify: rtNotify } = require('../services/realtime_service');
 
 class InventoryController {
   /* =========================================================================
@@ -45,14 +46,17 @@ class InventoryController {
   static async adjustStock(req, res) {
     try {
       const restaurantId = req.user.restaurant_id;
-      const { menuItemId, adjustmentType, quantity, unit, lowStockThreshold, reason } = req.body;
+      const { menuItemId, warehouseId, warehouse_id, adjustmentType, quantity, unit, lowStockThreshold, reason } = req.body;
 
       if (!menuItemId || !adjustmentType || quantity === undefined) {
         return res.status(400).json({ error: 'Item ID, adjustment type, and quantity are required.' });
       }
 
+      const targetWarehouseId = warehouseId || warehouse_id || null;
+
       const result = await InventoryRepository.adjustStock(restaurantId, {
         menuItemId,
+        warehouseId: targetWarehouseId,
         userId: req.user.id,
         userName: req.user.name || req.user.username,
         adjustmentType,
@@ -60,6 +64,15 @@ class InventoryController {
         unit,
         lowStockThreshold,
         reason
+      });
+
+      // Notify all connected clients of this restaurant that stock changed
+      rtNotify.stockUpdated(restaurantId, {
+        action: 'adjust',
+        menuItemId,
+        warehouseId: result.warehouseId,
+        adjustmentType,
+        quantity
       });
 
       return res.json({
@@ -211,6 +224,17 @@ class InventoryController {
       return res.json(stock);
     } catch (err) {
       return res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async getItemStockAcrossWarehouses(req, res) {
+    try {
+      const { id } = req.params;
+      const stocks = await WarehouseRepository.getItemStockAcrossWarehouses(req.user.restaurant_id, id);
+      return res.json(stocks);
+    } catch (err) {
+      console.error('Get item stock across warehouses error:', err);
+      return res.status(500).json({ error: 'Failed to retrieve item stocks: ' + err.message });
     }
   }
 

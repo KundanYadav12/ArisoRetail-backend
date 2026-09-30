@@ -41,6 +41,9 @@ router.post('/custom/saved', authorizeRoles('manager', 'admin', 'owner', 'super_
 router.delete('/custom/saved/:id', authorizeRoles('manager', 'admin', 'owner', 'super_admin', 'superadmin'), ReportController.deleteSavedReport);
 router.post('/custom/run', authorizeRoles('manager', 'admin', 'owner', 'super_admin', 'superadmin'), ReportController.runCustomReport);
 
+// Financial Statements & Accounting Overview (All 6 Reports)
+router.get('/financial/overview', authorizeRoles('manager', 'admin', 'owner', 'super_admin', 'superadmin'), ReportController.getFinancialOverview);
+
 // Standard Reports Execution & Exports
 router.get('/view/:reportId', authorizeRoles('cashier', 'salesman', 'manager', 'admin', 'owner', 'super_admin', 'superadmin'), ReportController.getReportData);
 router.get('/export/:reportId', authorizeRoles('manager', 'admin', 'owner', 'super_admin', 'superadmin'), ReportController.exportReport);

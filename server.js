@@ -33,6 +33,8 @@ const customerReceivableRoutes = require('./routes/customer_receivable_routes');
 const serialNumberRoutes = require('./routes/serial_number_routes');
 
 const { apiLimiter, authLimiter } = require('./middlewares/rate_limiter_middleware');
+const { addClient, removeClient } = require('./services/realtime_service');
+const { authenticateToken } = require('./middlewares/auth_middleware');
 
 const app = express();
 const PORT = process.env.PORT || 5004;
@@ -141,6 +143,39 @@ app.use('/api/serial-numbers', serialNumberRoutes);
 
 const ThemeController = require('./controllers/theme_controller');
 app.get('/api/theme/config', ThemeController.getTheme);
+
+// ── Real-Time Server-Sent Events (SSE) ────────────────────────────────────────
+// GET /api/events — authenticated streaming endpoint.
+// Each tab/device opens one long-lived connection; the server pushes named events
+// whenever data changes (menu, categories, stock, orders, etc.).
+app.get('/api/events', authenticateToken, (req, res) => {
+  const restaurantId = req.user && req.user.restaurant_id;
+  if (!restaurantId) return res.status(403).end();
+
+  // SSE headers
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'   // disable nginx proxy buffering
+  });
+  res.flushHeaders();
+
+  // Initial handshake — tells the client the connection is alive
+  res.write(`event: connected\ndata: ${JSON.stringify({ restaurantId, ts: Date.now() })}\n\n`);
+
+  // Keep-alive ping every 25 s (prevents proxies from closing the connection)
+  const keepAlive = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch (_) {}
+  }, 25000);
+
+  addClient(restaurantId, res);
+
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    removeClient(restaurantId, res);
+  });
+});
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
