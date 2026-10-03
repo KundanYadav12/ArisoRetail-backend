@@ -64,14 +64,64 @@ class SerialNumberController {
   }
 
   /**
-   * Manual generation of serial numbers for existing inventory / stock
+   * Check availability and format of a proposed manual 8-digit Serial Number
+   */
+  static async checkAvailability(req, res) {
+    try {
+      const serial = req.query.serial || req.query.sn || req.query.serial_number;
+      if (!serial || !String(serial).trim()) {
+        return res.status(400).json({ error: 'Please provide a serial number to validate.' });
+      }
+
+      const cleanSerial = String(serial).trim();
+      const isValidFormat = /^\d{8}$/.test(cleanSerial);
+
+      if (!isValidFormat) {
+        return res.json({
+          available: false,
+          valid_format: false,
+          error: 'Serial number must be exactly 8 digits (e.g. 12345678).'
+        });
+      }
+
+      const [rows] = await pool.execute(
+        'SELECT id, serial_number FROM product_serial_numbers WHERE serial_number = ? LIMIT 1',
+        [cleanSerial]
+      );
+
+      if (rows.length > 0) {
+        return res.json({
+          available: false,
+          valid_format: true,
+          error: `Serial number "${cleanSerial}" is already registered in the system.`
+        });
+      }
+
+      return res.json({
+        available: true,
+        valid_format: true,
+        message: `Serial number "${cleanSerial}" is unique and available.`
+      });
+    } catch (err) {
+      console.error('[SerialNumberController.checkAvailability] Error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to check availability.' });
+    }
+  }
+
+  /**
+   * Manual generation or registration of serial numbers for existing inventory / stock
    */
   static async generateManual(req, res) {
     try {
       const restaurantId = req.user.restaurant_id;
       const result = await SerialNumberService.generateManual(restaurantId, req.body);
+      const isManual = result.mode === 'manual';
+      const msg = isManual
+        ? `Successfully registered serial number "${result.serial_numbers[0]}" for "${result.product_name}".`
+        : `Successfully generated ${result.quantity} unique serial numbers for "${result.product_name}".`;
+
       return res.status(201).json({
-        message: `Successfully generated ${result.quantity} unique serial numbers for "${result.product_name}".`,
+        message: msg,
         data: result,
         created_count: result.quantity,
         serial_numbers: result.serial_numbers

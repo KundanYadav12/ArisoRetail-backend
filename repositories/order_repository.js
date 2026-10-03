@@ -960,6 +960,7 @@ class OrderRepository {
       cashier_id, 
       order_status, 
       payment_mode,
+      price_type,
       date_from, 
       date_to, 
       search, 
@@ -983,6 +984,13 @@ class OrderRepository {
       whereClause += ' AND payment_mode = ?';
       params.push(payment_mode);
     }
+    if (price_type && price_type !== 'all') {
+      if (price_type === 'wholesale') {
+        whereClause += " AND (price_list = 'wholesale')";
+      } else if (price_type === 'retail' || price_type === 'standard') {
+        whereClause += " AND (price_list = 'standard' OR price_list = 'retail' OR price_list IS NULL OR price_list = '')";
+      }
+    }
     if (date_from) {
       whereClause += ' AND created_at >= ?';
       params.push(date_from);
@@ -1004,7 +1012,7 @@ class OrderRepository {
     const totalRecords = countRows[0]?.total_records || 0;
 
     // 2. Get Paginated Data Rows
-    let dataQuery = `SELECT id, unique_order_number, subtotal, tax_amount, discount_amount, total_amount, payment_mode, order_status, cashier_name, created_at FROM orders${whereClause} ORDER BY id DESC`;
+    let dataQuery = `SELECT id, unique_order_number, subtotal, tax_amount, discount_amount, total_amount, payment_mode, order_status, cashier_name, customer_name, customer_phone, price_list, is_sales_order, is_estimate, created_at FROM orders${whereClause} ORDER BY id DESC`;
     const dataParams = [...params];
 
     const safeLimit = Math.max(1, parseInt(limit) || 20);

@@ -153,11 +153,16 @@ class StockReconciliationService {
     // Current location distribution
     const [locations] = await pool.execute(`
       SELECT 
+        prs.id AS rack_stock_id,
         prs.warehouse_id,
         w.name AS warehouse_name,
+        w.code AS warehouse_code,
         prs.rack_id,
         r.rack_code,
         r.rack_name,
+        r.zone,
+        r.shelf,
+        r.bin,
         prs.current_stock
       FROM product_rack_stocks prs
       JOIN warehouses w ON prs.warehouse_id = w.id

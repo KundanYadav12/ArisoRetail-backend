@@ -21,7 +21,10 @@ router.get('/', SerialNumberController.list);
 // 3. Stats (total, in_stock, sold)
 router.get('/stats', SerialNumberController.getStats);
 
-// 4. Manual batch generation
+// 3.1 Check availability and validation of manual 8-digit serial number
+router.get('/check-availability', SerialNumberController.checkAvailability);
+
+// 4. Manual batch generation or registration
 router.post('/generate', SerialNumberController.generateManual);
 
 // 5. Dedicated Serial Number Barcode Print action

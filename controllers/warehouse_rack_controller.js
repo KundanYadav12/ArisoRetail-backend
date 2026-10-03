@@ -123,6 +123,37 @@ class WarehouseRackController {
       return res.status(500).json({ error: 'Failed to retrieve product movement timeline: ' + err.message });
     }
   }
+
+  static async assignRackStock(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const userId = req.user.id;
+      const userName = req.user.name || req.user.username;
+      const result = await WarehouseRackRepository.assignRackStock(restaurantId, userId, userName, req.body);
+      return res.json(result);
+    } catch (err) {
+      console.error('Assign rack stock error:', err);
+      return res.status(400).json({ error: err.message });
+    }
+  }
+
+  static async removeRackStock(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const userId = req.user.id;
+      const userName = req.user.name || req.user.username;
+      const result = await WarehouseRackRepository.removeRackStock(restaurantId, userId, userName, {
+        menu_item_id: req.body.menu_item_id || req.query.menu_item_id,
+        warehouse_id: req.body.warehouse_id || req.query.warehouse_id,
+        rack_id: req.body.rack_id || req.query.rack_id,
+        notes: req.body.notes || req.query.notes
+      });
+      return res.json(result);
+    } catch (err) {
+      console.error('Remove rack stock error:', err);
+      return res.status(400).json({ error: err.message });
+    }
+  }
 }
 
 module.exports = WarehouseRackController;

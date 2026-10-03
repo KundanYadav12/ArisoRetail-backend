@@ -119,11 +119,14 @@ class CustomerLedgerRepository {
    * Get ledger history for a Party/Customer
    */
   static async getLedger(customerId, restaurantId, limit = 50, offset = 0) {
-    const [rows] = await pool.execute(
+    const safeLimit = Math.max(1, parseInt(limit, 10) || 50);
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+
+    const [rows] = await pool.query(
       `SELECT * FROM customer_ledger 
        WHERE customer_id = ? AND restaurant_id = ? 
        ORDER BY id DESC LIMIT ? OFFSET ?`,
-      [customerId, restaurantId, parseInt(limit), parseInt(offset)]
+      [customerId, restaurantId, safeLimit, safeOffset]
     );
 
     const [summaryRows] = await pool.execute(

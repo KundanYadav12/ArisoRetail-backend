@@ -49,7 +49,7 @@ class MenuRepository {
 
   static async create(restaurantId, item) {
     const {
-      category_id, name, sku, barcode, description, price, purchase_price,
+      category_id, name, sku, barcode, description, price, wholesale_price, purchase_price,
       is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category,
       gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url,
       seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory,
@@ -63,7 +63,7 @@ class MenuRepository {
 
     const [result] = await pool.execute(
       `INSERT INTO menu_items (
-        restaurant_id, category_id, name, sku, barcode, description, price, purchase_price,
+        restaurant_id, category_id, name, sku, barcode, description, price, wholesale_price, purchase_price,
         is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category, gst_rate,
         prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url, seq, kitchen_category,
         printer_id, unit, current_stock, low_stock_threshold, track_inventory,
@@ -72,7 +72,7 @@ class MenuRepository {
         stock_start_date, at_par_stock, min_stock, linked_sales_account, linked_purchase_account,
         open_qty_popup, open_price_popup, not_for_sale
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
@@ -89,6 +89,7 @@ class MenuRepository {
         barcode || null,
         description || null,
         price !== undefined ? price : 0,
+        wholesale_price !== undefined ? wholesale_price : null,
         purchase_price !== undefined ? purchase_price : 0.00,
         is_weight_based === 1 ? 1 : 0,
         base_unit || unit || 'pcs',
@@ -139,7 +140,7 @@ class MenuRepository {
 
   static async update(id, restaurantId, item) {
     const {
-      category_id, name, sku, barcode, description, price, purchase_price,
+      category_id, name, sku, barcode, description, price, wholesale_price, purchase_price,
       is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category,
       gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url,
       seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory,
@@ -151,7 +152,7 @@ class MenuRepository {
 
     const [result] = await pool.execute(
       `UPDATE menu_items SET
-        category_id = ?, name = ?, sku = ?, barcode = ?, description = ?, price = ?,
+        category_id = ?, name = ?, sku = ?, barcode = ?, description = ?, price = ?, wholesale_price = ?,
         purchase_price = ?, is_weight_based = ?, base_unit = ?, min_sale_qty = ?,
         max_sale_qty = ?, sub_category = ?, gst_rate = ?, prep_time_minutes = ?,
         is_veg = ?, spicy_level = ?, is_available = ?, image_url = ?, barcode_image_url = COALESCE(?, barcode_image_url), seq = ?,
@@ -189,6 +190,7 @@ class MenuRepository {
         barcode || null,
         description || null,
         price !== undefined ? price : 0,
+        wholesale_price !== undefined ? wholesale_price : null,
         purchase_price !== undefined ? purchase_price : 0.00,
         is_weight_based === 1 ? 1 : 0,
         base_unit || unit || 'pcs',

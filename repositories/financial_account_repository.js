@@ -478,7 +478,9 @@ class FinancialAccountRepository {
    */
   static async getTransfers(restaurantId, filters = {}) {
     const { limit = 50, offset = 0 } = filters;
-    const [rows] = await pool.execute(`
+    const safeLimit = Math.max(1, parseInt(limit, 10) || 50);
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const [rows] = await pool.query(`
       SELECT at.*,
         fa_from.account_name as from_account_name, fa_from.account_type as from_account_type,
         fa_to.account_name as to_account_name, fa_to.account_type as to_account_type
@@ -488,7 +490,7 @@ class FinancialAccountRepository {
       WHERE at.restaurant_id = ?
       ORDER BY at.id DESC
       LIMIT ? OFFSET ?
-    `, [restaurantId, parseInt(limit, 10), parseInt(offset, 10)]);
+    `, [restaurantId, safeLimit, safeOffset]);
 
     return rows;
   }
@@ -554,10 +556,12 @@ class FinancialAccountRepository {
       params.push(dateTo);
     }
 
+    const safeLimit = Math.max(1, parseInt(limit, 10) || 50);
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
     sql += ' ORDER BY e.id DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit, 10), parseInt(offset, 10));
+    params.push(safeLimit, safeOffset);
 
-    const [rows] = await pool.execute(sql, params);
+    const [rows] = await pool.query(sql, params);
     return rows;
   }
 

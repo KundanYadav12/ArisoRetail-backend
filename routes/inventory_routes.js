@@ -41,6 +41,9 @@ router.get('/suppliers/:id', requirePermission('suppliers'), InventoryController
 router.get('/suppliers/:id/bills', requirePermission('suppliers'), InventoryController.getSupplierBills);
 router.get('/suppliers/:id/payables', requirePermission('suppliers'), SupplierPayableController.getSupplierPayableDetails);
 router.get('/suppliers/:id/ledger-statement', requirePermission('suppliers'), SupplierPayableController.getDetailedLedger);
+router.get('/suppliers/:id/ledger-statement/pdf', requirePermission('suppliers'), SupplierPayableController.downloadLedgerPDF);
+router.get('/suppliers/:id/ledger-statement/excel', requirePermission('suppliers'), SupplierPayableController.downloadLedgerExcel);
+router.post('/suppliers/:id/ledger-statement/email', requirePermission('suppliers'), SupplierPayableController.emailLedgerStatement);
 router.post('/suppliers', authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), InventoryController.createSupplier);
 router.put('/suppliers/:id', authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), InventoryController.updateSupplier);
 router.delete('/suppliers/:id', authorizeRoles('admin', 'super_admin', 'superadmin'), InventoryController.deleteSupplier);
@@ -107,6 +110,8 @@ router.delete('/racks/:id', authorizeRoles('admin', 'manager', 'super_admin', 's
 router.get('/racks/:id/products', requirePermission('rack_management'), WarehouseRackController.getProductsByRack);
 router.get('/products/:productId/racks', requirePermission('rack_management'), WarehouseRackController.getRacksByProduct);
 router.post('/racks/transfer', authorizeRoles('admin', 'manager', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('rack_management'), WarehouseRackController.moveRackStock);
+router.post('/racks/assign', authorizeRoles('admin', 'manager', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('rack_management'), WarehouseRackController.assignRackStock);
+router.delete('/racks/assign', authorizeRoles('admin', 'manager', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('rack_management'), WarehouseRackController.removeRackStock);
 router.get('/stock-tally', requirePermission('rack_management'), WarehouseRackController.getStockTally);
 router.get('/products/:productId/timeline', requirePermission('rack_management'), WarehouseRackController.getProductMovementTimeline);
 

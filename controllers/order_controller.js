@@ -513,6 +513,12 @@ class OrderController {
         }
       }
 
+      if (req.query.price_type && req.query.price_type !== 'all') {
+        filters.price_type = req.query.price_type;
+      } else if (req.query.price_list && req.query.price_list !== 'all') {
+        filters.price_type = req.query.price_list;
+      }
+
       if (req.user.assigned_warehouse_id) {
         filters.warehouse_id = req.user.assigned_warehouse_id;
       } else if (req.query.warehouse_id && req.query.warehouse_id !== 'all') {
@@ -535,6 +541,7 @@ class OrderController {
       const filters = {
         order_status: req.query.order_status && req.query.order_status !== 'all' ? req.query.order_status : undefined,
         payment_mode: req.query.payment_mode && req.query.payment_mode !== 'all' ? req.query.payment_mode : undefined,
+        price_type: (req.query.price_type || req.query.price_list) && (req.query.price_type || req.query.price_list) !== 'all' ? (req.query.price_type || req.query.price_list) : undefined,
         search: req.query.search
       };
 
@@ -554,6 +561,7 @@ class OrderController {
         { header: 'Order Number', key: 'unique_order_number', width: 22 },
         { header: 'Cashier', key: 'cashier_name', width: 18 },
         { header: 'Date & Time', key: 'created_at', width: 20 },
+        { header: 'Price Type', key: 'price_type', width: 14 },
         { header: 'Subtotal (Rs)', key: 'subtotal', width: 14 },
         { header: 'Tax (Rs)', key: 'tax_amount', width: 14 },
         { header: 'Discount (Rs)', key: 'discount_amount', width: 14 },
@@ -568,6 +576,7 @@ class OrderController {
         unique_order_number: order.unique_order_number || '',
         cashier_name: order.cashier_name || '',
         created_at: new Date(order.created_at).toLocaleString(),
+        price_type: (order.price_list || '').toLowerCase() === 'wholesale' ? 'Wholesale' : 'Retail',
         subtotal: parseFloat(order.subtotal || 0).toFixed(2),
         tax_amount: parseFloat(order.tax_amount || 0).toFixed(2),
         discount_amount: parseFloat(order.discount_amount || 0).toFixed(2),
@@ -601,6 +610,7 @@ class OrderController {
       const filters = {
         order_status: req.query.order_status && req.query.order_status !== 'all' ? req.query.order_status : undefined,
         payment_mode: req.query.payment_mode && req.query.payment_mode !== 'all' ? req.query.payment_mode : undefined,
+        price_type: (req.query.price_type || req.query.price_list) && (req.query.price_type || req.query.price_list) !== 'all' ? (req.query.price_type || req.query.price_list) : undefined,
         search: req.query.search
       };
 
@@ -616,11 +626,12 @@ class OrderController {
 
       const orders = await OrderRepository.getHistory(restaurantId, filters);
 
-      let csv = 'Order Number,Cashier,Date,Subtotal,Tax,Discount,Total,Payment Mode,Status,Customer Name,Customer Phone\r\n';
+      let csv = 'Order Number,Cashier,Date,Price Type,Subtotal,Tax,Discount,Total,Payment Mode,Status,Customer Name,Customer Phone\r\n';
       orders.forEach(order => {
         const dateStr = new Date(order.created_at).toLocaleString();
+        const priceType = (order.price_list || '').toLowerCase() === 'wholesale' ? 'Wholesale' : 'Retail';
         const cleanCustName = (order.customer_name || '').replace(/,/g, ' ');
-        csv += `"${order.unique_order_number}","${order.cashier_name}","${dateStr}",${parseFloat(order.subtotal).toFixed(2)},${parseFloat(order.tax_amount).toFixed(2)},${parseFloat(order.discount_amount).toFixed(2)},${parseFloat(order.total_amount).toFixed(2)},"${order.payment_mode}","${order.order_status}","${cleanCustName}","${order.customer_phone || ''}"\r\n`;
+        csv += `"${order.unique_order_number}","${order.cashier_name}","${dateStr}","${priceType}",${parseFloat(order.subtotal).toFixed(2)},${parseFloat(order.tax_amount).toFixed(2)},${parseFloat(order.discount_amount).toFixed(2)},${parseFloat(order.total_amount).toFixed(2)},"${order.payment_mode}","${order.order_status}","${cleanCustName}","${order.customer_phone || ''}"\r\n`;
       });
 
       res.setHeader('Content-Type', 'text/csv');

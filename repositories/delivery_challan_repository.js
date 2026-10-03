@@ -243,7 +243,7 @@ class DeliveryChallanRepository {
    * List all Delivery Challans for a restaurant (paginated & filtered)
    */
   static async getAll(restaurantId, filters = {}) {
-    const { search, status, warehouse_id, date_from, date_to, limit = 50, offset = 0 } = filters;
+    const { search, status, warehouse_id, party_id, customer_id, date_from, date_to, limit = 50, offset = 0 } = filters;
     let query = `
       SELECT dc.*, o.unique_order_number AS sales_order_number, w.name AS warehouse_name,
              (SELECT COUNT(*) FROM delivery_challan_items dci WHERE dci.delivery_challan_id = dc.id) AS total_items,
@@ -255,6 +255,11 @@ class DeliveryChallanRepository {
     `;
     const params = [restaurantId];
 
+    const targetPartyId = party_id || customer_id;
+    if (targetPartyId && targetPartyId !== 'all') {
+      query += ' AND dc.party_id = ?';
+      params.push(targetPartyId);
+    }
     if (status && status !== 'all') {
       query += ' AND dc.status = ?';
       params.push(status);
@@ -277,10 +282,13 @@ class DeliveryChallanRepository {
       params.push(s, s, s, s, s);
     }
 
-    query += ' ORDER BY dc.id DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), parseInt(offset));
+    const safeLimit = Math.max(1, parseInt(limit, 10) || 50);
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
 
-    const [rows] = await pool.execute(query, params);
+    query += ' ORDER BY dc.id DESC LIMIT ? OFFSET ?';
+    params.push(safeLimit, safeOffset);
+
+    const [rows] = await pool.query(query, params);
     return rows;
   }
 

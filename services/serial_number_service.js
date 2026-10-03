@@ -30,6 +30,95 @@ class SerialNumberService {
   }
 
   /**
+   * Helper: Calculate warranty start, end, and expired status dynamically
+   * Warranty start date = date of sale to customer (not generation or purchase).
+   * Warranty end date = start date + duration (months or years).
+   */
+  static calculateWarranty(saleDate, durationVal, durationUnit) {
+    const rawVal = durationVal !== undefined && durationVal !== null && String(durationVal).trim() !== ''
+      ? parseInt(durationVal, 10)
+      : null;
+
+    if (!rawVal || isNaN(rawVal) || rawVal <= 0) {
+      return {
+        has_warranty: false,
+        warranty_duration_value: null,
+        warranty_duration_unit: null,
+        warranty_duration_text: null,
+        warranty_start_date: null,
+        warranty_start_date_formatted: null,
+        warranty_end_date: null,
+        warranty_end_date_formatted: null,
+        is_warranty_expired: false,
+        warranty_status: 'no_warranty' // 'no_warranty' | 'not_started' | 'active' | 'expired'
+      };
+    }
+
+    const unit = String(durationUnit || 'months').toLowerCase().trim();
+    const isYear = unit.startsWith('year');
+    const unitLabel = isYear ? (rawVal === 1 ? 'Year' : 'Years') : (rawVal === 1 ? 'Month' : 'Months');
+    const durationText = `${rawVal} ${unitLabel}`;
+
+    if (!saleDate) {
+      return {
+        has_warranty: true,
+        warranty_duration_value: rawVal,
+        warranty_duration_unit: isYear ? 'years' : 'months',
+        warranty_duration_text: durationText,
+        warranty_start_date: null,
+        warranty_start_date_formatted: null,
+        warranty_end_date: null,
+        warranty_end_date_formatted: null,
+        is_warranty_expired: false,
+        warranty_status: 'not_started'
+      };
+    }
+
+    const dtStart = new Date(saleDate);
+    if (isNaN(dtStart.getTime())) {
+      return {
+        has_warranty: true,
+        warranty_duration_value: rawVal,
+        warranty_duration_unit: isYear ? 'years' : 'months',
+        warranty_duration_text: durationText,
+        warranty_start_date: null,
+        warranty_start_date_formatted: null,
+        warranty_end_date: null,
+        warranty_end_date_formatted: null,
+        is_warranty_expired: false,
+        warranty_status: 'not_started'
+      };
+    }
+
+    const dtEnd = new Date(dtStart);
+    if (isYear) {
+      dtEnd.setFullYear(dtEnd.getFullYear() + rawVal);
+    } else {
+      dtEnd.setMonth(dtEnd.getMonth() + rawVal);
+    }
+
+    const now = new Date();
+    // Expiration check: strictly past warranty end date
+    const isExpired = now.getTime() > dtEnd.getTime();
+
+    const startFormatted = this.formatDate(dtStart);
+    const endFormatted = this.formatDate(dtEnd);
+
+    return {
+      has_warranty: true,
+      warranty_duration_value: rawVal,
+      warranty_duration_unit: isYear ? 'years' : 'months',
+      warranty_duration_text: durationText,
+      warranty_start_date: dtStart.toISOString().slice(0, 10),
+      warranty_start_date_formatted: startFormatted,
+      warranty_end_date: dtEnd.toISOString().slice(0, 10),
+      warranty_end_date_formatted: endFormatted,
+      is_warranty_expired: isExpired,
+      warranty_status: isExpired ? 'expired' : 'active'
+    };
+  }
+
+  /**
    * Generate a unique 8-digit serial number (e.g. 12345678)
    * Guaranteed to be unique in product_serial_numbers
    */
@@ -191,12 +280,25 @@ class SerialNumberService {
                 customer_name = ?,
                 customer_phone = ?,
                 sale_price = ?,
+                warranty_start_date = CASE 
+                  WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 
+                  THEN DATE(?) 
+                  ELSE NULL 
+                END,
+                warranty_end_date = CASE 
+                  WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 AND warranty_duration_unit = 'years' 
+                    THEN DATE(DATE_ADD(?, INTERVAL warranty_duration_value YEAR))
+                  WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 
+                    THEN DATE(DATE_ADD(?, INTERVAL warranty_duration_value MONTH))
+                  ELSE NULL 
+                END,
                 updated_at = NOW()
             WHERE restaurant_id = ? AND serial_number = ?
           `, [
             orderId, invoiceNo, effectiveSaleDate,
             customerId || null, customerName || null, customerPhone || null,
             salePrice,
+            effectiveSaleDate, effectiveSaleDate, effectiveSaleDate,
             restaurantId, cleanSerial
           ]);
           continue;
@@ -224,12 +326,25 @@ class SerialNumberService {
                   customer_name = ?,
                   customer_phone = ?,
                   sale_price = ?,
+                  warranty_start_date = CASE 
+                    WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 
+                    THEN DATE(?) 
+                    ELSE NULL 
+                  END,
+                  warranty_end_date = CASE 
+                    WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 AND warranty_duration_unit = 'years' 
+                      THEN DATE(DATE_ADD(?, INTERVAL warranty_duration_value YEAR))
+                    WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 
+                      THEN DATE(DATE_ADD(?, INTERVAL warranty_duration_value MONTH))
+                    ELSE NULL 
+                  END,
                   updated_at = NOW()
               WHERE id = ?
             `, [
               orderId, invoiceNo, effectiveSaleDate,
               customerId || null, customerName || null, customerPhone || null,
               salePrice,
+              effectiveSaleDate, effectiveSaleDate, effectiveSaleDate,
               sRow.id
             ]);
           }
@@ -296,6 +411,13 @@ class SerialNumberService {
     const saleDateFormatted = isSold ? this.formatDate(row.sale_date) : null;
     const saleInvoice = isSold ? (row.sales_invoice_number || row.unique_order_number || row.order_code || 'N/A') : null;
 
+    // Calculate Warranty status
+    const warrantyInfo = this.calculateWarranty(
+      row.sale_date,
+      row.warranty_duration_value,
+      row.warranty_duration_unit
+    );
+
     return {
       serial_number: row.serial_number,
       status: row.status,
@@ -303,6 +425,18 @@ class SerialNumberService {
       status_label: isSold ? 'Sold' : 'Not Sold (In Stock)',
       created_at: row.created_at,
       updated_at: row.updated_at,
+
+      // Warranty Information
+      warranty: warrantyInfo,
+      warranty_duration_value: warrantyInfo.warranty_duration_value,
+      warranty_duration_unit: warrantyInfo.warranty_duration_unit,
+      warranty_duration_text: warrantyInfo.warranty_duration_text,
+      warranty_start_date: warrantyInfo.warranty_start_date,
+      warranty_start_date_formatted: warrantyInfo.warranty_start_date_formatted,
+      warranty_end_date: warrantyInfo.warranty_end_date,
+      warranty_end_date_formatted: warrantyInfo.warranty_end_date_formatted,
+      is_warranty_expired: warrantyInfo.is_warranty_expired,
+      warranty_status: warrantyInfo.warranty_status,
       
       product: {
         id: row.menu_item_id,
@@ -444,33 +578,54 @@ class SerialNumberService {
 
     const [rows] = await pool.query(query, params);
 
-    const formattedList = rows.map(r => ({
-      id: r.id,
-      serial_number: r.serial_number,
-      status: r.status,
-      is_sold: r.status === 'sold' || Boolean(r.order_id),
-      product_id: r.menu_item_id,
-      menu_item_id: r.menu_item_id,
-      product_name: r.product_name,
-      product_sku: r.product_sku || '',
-      product_barcode: r.product_barcode || '',
-      product_price: parseFloat(r.product_price || 0),
-      category_name: r.category_name || 'General',
-      warehouse_id: r.warehouse_id,
-      warehouse_name: r.warehouse_name || 'Main Warehouse',
-      purchase_date: this.formatDate(r.purchase_date),
-      purchase_date_formatted: this.formatDate(r.purchase_date),
-      purchase_invoice: r.purchase_invoice_number || 'N/A',
-      purchase_invoice_number: r.purchase_invoice_number || 'N/A',
-      supplier_name: r.supplier_name || r.supplier_name_actual || r.supplier_company || 'Supplier',
-      sale_date: (r.status === 'sold' || r.order_id) ? this.formatDate(r.sale_date) : null,
-      sale_date_formatted: (r.status === 'sold' || r.order_id) ? this.formatDate(r.sale_date) : null,
-      sales_invoice: (r.status === 'sold' || r.order_id) ? (r.sales_invoice_number || r.unique_order_number || 'N/A') : null,
-      sales_invoice_number: (r.status === 'sold' || r.order_id) ? (r.sales_invoice_number || r.unique_order_number || 'N/A') : null,
-      unique_order_number: r.unique_order_number || null,
-      customer_name: (r.status === 'sold' || r.order_id) ? (r.customer_name || 'Walk-in Customer') : null,
-      created_at: r.created_at
-    }));
+    const formattedList = rows.map(r => {
+      const isSold = r.status === 'sold' || Boolean(r.order_id);
+      const warrantyInfo = this.calculateWarranty(
+        r.sale_date,
+        r.warranty_duration_value,
+        r.warranty_duration_unit
+      );
+
+      return {
+        id: r.id,
+        serial_number: r.serial_number,
+        status: r.status,
+        is_sold: isSold,
+        product_id: r.menu_item_id,
+        menu_item_id: r.menu_item_id,
+        product_name: r.product_name,
+        product_sku: r.product_sku || '',
+        product_barcode: r.product_barcode || '',
+        product_price: parseFloat(r.product_price || 0),
+        category_name: r.category_name || 'General',
+        warehouse_id: r.warehouse_id,
+        warehouse_name: r.warehouse_name || 'Main Warehouse',
+        purchase_date: this.formatDate(r.purchase_date),
+        purchase_date_formatted: this.formatDate(r.purchase_date),
+        purchase_invoice: r.purchase_invoice_number || 'N/A',
+        purchase_invoice_number: r.purchase_invoice_number || 'N/A',
+        supplier_name: r.supplier_name || r.supplier_name_actual || r.supplier_company || 'Supplier',
+        sale_date: isSold ? this.formatDate(r.sale_date) : null,
+        sale_date_formatted: isSold ? this.formatDate(r.sale_date) : null,
+        sales_invoice: isSold ? (r.sales_invoice_number || r.unique_order_number || 'N/A') : null,
+        sales_invoice_number: isSold ? (r.sales_invoice_number || r.unique_order_number || 'N/A') : null,
+        unique_order_number: r.unique_order_number || null,
+        customer_name: isSold ? (r.customer_name || 'Walk-in Customer') : null,
+        created_at: r.created_at,
+
+        // Warranty attributes
+        warranty: warrantyInfo,
+        warranty_duration_value: warrantyInfo.warranty_duration_value,
+        warranty_duration_unit: warrantyInfo.warranty_duration_unit,
+        warranty_duration_text: warrantyInfo.warranty_duration_text,
+        warranty_start_date: warrantyInfo.warranty_start_date,
+        warranty_start_date_formatted: warrantyInfo.warranty_start_date_formatted,
+        warranty_end_date: warrantyInfo.warranty_end_date,
+        warranty_end_date_formatted: warrantyInfo.warranty_end_date_formatted,
+        is_warranty_expired: warrantyInfo.is_warranty_expired,
+        warranty_status: warrantyInfo.warranty_status
+      };
+    });
 
     return {
       success: true,
@@ -527,11 +682,17 @@ class SerialNumberService {
   }
 
   /**
-   * Manually generate serial numbers for a product (e.g. existing inventory or opening stock)
+   * Manually generate or register serial numbers for a product (e.g. existing inventory or opening stock)
+   * Supports 'auto' (batch generated 8-digit unique serials) and 'manual' (user-typed 8-digit serial).
+   * Also captures optional warranty duration (value + unit: months/years).
    */
   static async generateManual(restaurantId, {
     menu_item_id,
     quantity = 1,
+    mode = 'auto', // 'auto' | 'manual'
+    serial_number = null,
+    warranty_duration_value = null,
+    warranty_duration_unit = 'months',
     warehouse_id = null,
     purchase_invoice_number = null,
     purchase_date = null,
@@ -539,8 +700,7 @@ class SerialNumberService {
     supplier_name = null,
     purchase_cost = 0
   }) {
-    if (!menu_item_id) throw new Error('menu_item_id is required.');
-    const count = Math.max(1, parseInt(quantity, 10));
+    if (!menu_item_id) throw new Error('Target product is required.');
 
     const [prodRows] = await pool.execute(
       'SELECT id, name, price, cost_price, purchase_price FROM menu_items WHERE id = ? AND restaurant_id = ?',
@@ -549,23 +709,58 @@ class SerialNumberService {
     if (prodRows.length === 0) throw new Error('Product not found in this store.');
     const prod = prodRows[0];
 
+    const isManualMode = String(mode).toLowerCase() === 'manual';
+    let count = 1;
+    let serialsToInsert = [];
+
+    // Parse warranty duration
+    const parsedWarrantyVal = (warranty_duration_value !== undefined && warranty_duration_value !== null && String(warranty_duration_value).trim() !== '')
+      ? parseInt(warranty_duration_value, 10)
+      : null;
+    const cleanWarrantyUnit = String(warranty_duration_unit || 'months').toLowerCase().trim().startsWith('year') ? 'years' : 'months';
+
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
 
-      const generatedSerials = await this.generateBatchSerialNumbers(count, connection);
+      if (isManualMode) {
+        if (!serial_number || !String(serial_number).trim()) {
+          throw new Error('Please enter an 8-digit serial number.');
+        }
+        const cleanSerial = String(serial_number).trim();
+        if (!/^\d{8}$/.test(cleanSerial)) {
+          throw new Error('Serial number must be exactly 8 digits (e.g. 12345678).');
+        }
+
+        // Validate uniqueness across system
+        const [existing] = await connection.execute(
+          'SELECT id, serial_number FROM product_serial_numbers WHERE serial_number = ? LIMIT 1',
+          [cleanSerial]
+        );
+        if (existing.length > 0) {
+          throw new Error(`Serial number "${cleanSerial}" already exists in the system. Please enter a unique serial number.`);
+        }
+
+        count = 1;
+        serialsToInsert = [cleanSerial];
+      } else {
+        count = Math.max(1, Math.min(500, parseInt(quantity, 10) || 1));
+        serialsToInsert = await this.generateBatchSerialNumbers(count, connection);
+      }
+
       const effectiveCost = parseFloat(purchase_cost || prod.cost_price || prod.purchase_price || 0);
       const effectiveDate = purchase_date || new Date().toISOString().slice(0, 10);
       const effectiveInvoice = purchase_invoice_number || `OPN-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
 
-      for (const serial of generatedSerials) {
+      for (const serial of serialsToInsert) {
         await connection.execute(`
           INSERT INTO product_serial_numbers (
             restaurant_id, serial_number, menu_item_id, warehouse_id, status,
             purchase_invoice_number, purchase_date,
             supplier_id, supplier_name, purchase_cost,
+            warranty_duration_value, warranty_duration_unit,
             created_at
-          ) VALUES (?, ?, ?, ?, 'in_stock', ?, ?, ?, ?, ?, NOW())
+          ) VALUES (?, ?, ?, ?, 'in_stock', ?, ?, ?, ?, ?, ?, ?, NOW())
         `, [
           restaurantId,
           serial,
@@ -575,7 +770,9 @@ class SerialNumberService {
           effectiveDate,
           supplier_id || null,
           supplier_name || null,
-          effectiveCost
+          effectiveCost,
+          parsedWarrantyVal,
+          cleanWarrantyUnit
         ]);
       }
 
@@ -584,7 +781,10 @@ class SerialNumberService {
         product_id: menu_item_id,
         product_name: prod.name,
         quantity: count,
-        serial_numbers: generatedSerials
+        serial_numbers: serialsToInsert,
+        mode: isManualMode ? 'manual' : 'auto',
+        warranty_duration_value: parsedWarrantyVal,
+        warranty_duration_unit: cleanWarrantyUnit
       };
     } catch (err) {
       await connection.rollback();

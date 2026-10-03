@@ -265,6 +265,188 @@ class WarehouseRackRepository {
       connection.release();
     }
   }
+
+  /**
+   * Assign or update product stock on a specific rack
+   */
+  static async assignRackStock(restaurantId, userId, userName, data) {
+    const {
+      menu_item_id,
+      warehouse_id,
+      rack_id,
+      quantity,
+      notes
+    } = data;
+
+    if (!menu_item_id || !warehouse_id || !rack_id) {
+      throw new Error('Product, warehouse, and rack are required.');
+    }
+
+    const targetQty = parseFloat(quantity);
+    if (isNaN(targetQty) || targetQty < 0) {
+      throw new Error('Quantity must be a valid positive number.');
+    }
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      // 1. Lock and check menu item
+      const [itemRows] = await connection.execute(
+        'SELECT id, name, sku, current_stock, unit FROM menu_items WHERE id = ? AND restaurant_id = ? FOR UPDATE',
+        [menu_item_id, restaurantId]
+      );
+      if (itemRows.length === 0) {
+        throw new Error('Menu item not found.');
+      }
+      const item = itemRows[0];
+      const totalSystemStock = parseFloat(item.current_stock || 0);
+      const unit = item.unit || 'pcs';
+
+      // 2. Check warehouse
+      const [whRows] = await connection.execute(
+        'SELECT id, name, code FROM warehouses WHERE id = ? AND restaurant_id = ?',
+        [warehouse_id, restaurantId]
+      );
+      if (whRows.length === 0) {
+        throw new Error('Warehouse not found.');
+      }
+      const warehouseName = whRows[0].name;
+
+      // 3. Check warehouse stock for this item
+      const [whStockRows] = await connection.execute(
+        'SELECT current_stock FROM warehouse_stocks WHERE restaurant_id = ? AND warehouse_id = ? AND menu_item_id = ?',
+        [restaurantId, warehouse_id, menu_item_id]
+      );
+      const whStock = whStockRows.length > 0 ? parseFloat(whStockRows[0].current_stock || 0) : 0;
+
+      // 4. Lock and check rack
+      const [rackRows] = await connection.execute(
+        'SELECT id, rack_code, rack_name FROM warehouse_racks WHERE id = ? AND warehouse_id = ? AND restaurant_id = ?',
+        [rack_id, warehouse_id, restaurantId]
+      );
+      if (rackRows.length === 0) {
+        throw new Error('Rack not found in the selected warehouse.');
+      }
+      const rack = rackRows[0];
+
+      // 5. Lock and check current stock in this rack
+      const [currentRackRows] = await connection.execute(
+        'SELECT current_stock FROM product_rack_stocks WHERE restaurant_id = ? AND warehouse_id = ? AND rack_id = ? AND menu_item_id = ? FOR UPDATE',
+        [restaurantId, warehouse_id, rack_id, menu_item_id]
+      );
+      const prevRackStock = currentRackRows.length > 0 ? parseFloat(currentRackRows[0].current_stock || 0) : 0;
+
+      // 6. Check total assigned across all other racks for this product
+      const [otherRacksRows] = await connection.execute(
+        'SELECT COALESCE(SUM(current_stock), 0) AS other_total FROM product_rack_stocks WHERE restaurant_id = ? AND menu_item_id = ? AND NOT (warehouse_id = ? AND rack_id = ?)',
+        [restaurantId, menu_item_id, warehouse_id, rack_id]
+      );
+      const otherRacksTotal = parseFloat(otherRacksRows[0]?.other_total || 0);
+      const newTotalAcrossRacks = otherRacksTotal + targetQty;
+
+      // VALIDATION: Total assigned across racks cannot exceed Total System Stock
+      if (newTotalAcrossRacks > totalSystemStock) {
+        const maxAssignable = Math.max(0, totalSystemStock - otherRacksTotal);
+        throw new Error(`Total assigned stock across racks (${newTotalAcrossRacks} ${unit}) cannot exceed Total System Stock (${totalSystemStock} ${unit}). Maximum assignable for this rack is ${maxAssignable} ${unit}.`);
+      }
+
+      // Ensure warehouse_stocks records exist and are synchronized with rack assignment
+      if (whStockRows.length === 0) {
+        await connection.execute(`
+          INSERT INTO warehouse_stocks (restaurant_id, warehouse_id, menu_item_id, current_stock, reserved_stock, min_stock, reorder_level)
+          VALUES (?, ?, ?, ?, 0.000, 0.000, 5.000)
+          ON DUPLICATE KEY UPDATE current_stock = GREATEST(current_stock, VALUES(current_stock))
+        `, [restaurantId, warehouse_id, menu_item_id, targetQty]);
+      } else if (targetQty > whStock) {
+        await connection.execute(`
+          UPDATE warehouse_stocks
+          SET current_stock = ?
+          WHERE restaurant_id = ? AND warehouse_id = ? AND menu_item_id = ?
+        `, [targetQty, restaurantId, warehouse_id, menu_item_id]);
+      }
+
+      const diff = targetQty - prevRackStock;
+
+      // 7. Update or delete product_rack_stocks
+      if (targetQty > 0) {
+        await connection.execute(`
+          INSERT INTO product_rack_stocks (restaurant_id, warehouse_id, rack_id, menu_item_id, current_stock)
+          VALUES (?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE current_stock = VALUES(current_stock), updated_at = NOW()
+        `, [restaurantId, warehouse_id, rack_id, menu_item_id, targetQty]);
+      } else {
+        await connection.execute(`
+          DELETE FROM product_rack_stocks
+          WHERE restaurant_id = ? AND warehouse_id = ? AND rack_id = ? AND menu_item_id = ?
+        `, [restaurantId, warehouse_id, rack_id, menu_item_id]);
+      }
+
+      // 8. Record in stock_transactions ledger if there is a difference
+      if (Math.abs(diff) > 0.0001) {
+        let noteText = '';
+        if (prevRackStock === 0) {
+          noteText = `Assigned ${targetQty} ${unit} to Rack ${rack.rack_code} — Manual Assignment`;
+        } else if (targetQty === 0) {
+          noteText = `Removed ${prevRackStock} ${unit} from Rack ${rack.rack_code} — Manual Assignment`;
+        } else {
+          noteText = `Updated Rack ${rack.rack_code} stock: ${prevRackStock} → ${targetQty} ${unit} — Manual Assignment`;
+        }
+        if (notes && notes.trim()) {
+          noteText += ` (${notes.trim()})`;
+        }
+
+        await connection.execute(`
+          INSERT INTO stock_transactions (
+            restaurant_id, warehouse_id, rack_id, rack_code, dest_rack_id, dest_rack_code, menu_item_id, transaction_type,
+            quantity, previous_stock, new_stock, unit_cost, total_cost,
+            reference_type, reference_number,
+            user_id, user_name, notes, created_at
+          ) VALUES (?, ?, ?, ?, NULL, NULL, ?, 'STOCK_CORRECTION', ?, ?, ?, 0.00, 0.00, 'rack_assignment', ?, ?, ?, ?, NOW())
+        `, [
+          restaurantId, warehouse_id, rack_id, rack.rack_code, menu_item_id,
+          diff, prevRackStock, targetQty,
+          `RACK-ASSIGN-${rack.rack_code}`,
+          userId || null, userName || 'System',
+          noteText
+        ]);
+      }
+
+      await connection.commit();
+      return {
+        success: true,
+        menu_item_id,
+        warehouse_id,
+        warehouse_name: warehouseName,
+        rack_id,
+        rack_code: rack.rack_code,
+        rack_name: rack.rack_name,
+        previous_stock: prevRackStock,
+        current_stock: targetQty,
+        total_rack_stock: newTotalAcrossRacks,
+        total_system_stock: totalSystemStock
+      };
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+  }
+
+  /**
+   * Remove rack assignment (set rack stock to 0)
+   */
+  static async removeRackStock(restaurantId, userId, userName, data) {
+    const { menu_item_id, warehouse_id, rack_id, notes } = data;
+    return this.assignRackStock(restaurantId, userId, userName, {
+      menu_item_id,
+      warehouse_id,
+      rack_id,
+      quantity: 0,
+      notes: notes || 'Manual removal of rack assignment'
+    });
+  }
 }
 
 module.exports = WarehouseRackRepository;

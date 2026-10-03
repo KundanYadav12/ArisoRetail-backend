@@ -15,7 +15,9 @@ router.get('/export/sales-csv', authorizeRoles('admin', 'manager', 'owner', 'sup
 
 // Item-wise Sales Analytics routes
 router.get('/item-wise/export-excel', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.exportItemSalesExcel);
+router.post('/item-wise/export-excel', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.exportItemSalesExcel);
 router.get('/item-wise/export-csv', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.exportItemSalesCSV);
+router.post('/item-wise/export-csv', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.exportItemSalesCSV);
 router.get('/item-wise/:id/history', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.getItemSalesHistory);
 router.get('/item-wise', authorizeRoles('admin', 'manager', 'owner', 'super_admin', 'superadmin', 'warehouse_manager'), requirePermission('warehouse_reports'), ReportController.getItemWiseReport);
 

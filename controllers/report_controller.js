@@ -195,18 +195,29 @@ class ReportController {
    * Export Item-wise Sales Report to Excel (.xlsx)
    */
   static async exportItemSalesExcel(req, res) {
-    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
-
     try {
-      const restaurantId = req.user.restaurant_id;
-      const items = await ReportRepository.getItemWiseSalesReport(restaurantId, {
-        dateFrom,
-        dateTo,
-        categoryId: req.query.category_id,
-        search: req.query.search,
-        sortBy: req.query.sort_by,
-        sortOrder: req.query.sort_order
-      });
+      let items;
+      let dateFromStr = '';
+      let dateToStr = '';
+
+      if (req.body && Array.isArray(req.body.items)) {
+        items = req.body.items;
+        dateFromStr = req.query.date_from ? String(req.query.date_from).slice(0, 10) : getISTDateString();
+        dateToStr = req.query.date_to ? String(req.query.date_to).slice(0, 10) : getISTDateString();
+      } else {
+        const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
+        dateFromStr = dateFrom.slice(0, 10);
+        dateToStr = dateTo.slice(0, 10);
+        const restaurantId = req.user.restaurant_id;
+        items = await ReportRepository.getItemWiseSalesReport(restaurantId, {
+          dateFrom,
+          dateTo,
+          categoryId: req.query.category_id,
+          search: req.query.search,
+          sortBy: req.query.sort_by,
+          sortOrder: req.query.sort_order
+        });
+      }
 
       const columns = [
         { header: 'Item Name', key: 'name', width: 25 },
@@ -241,7 +252,7 @@ class ReportController {
       });
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename=item_sales_report_${dateFrom.slice(0, 10)}_to_${dateTo.slice(0, 10)}.xlsx`);
+      res.setHeader('Content-Disposition', `attachment; filename=item_sales_report_${dateFromStr}_to_${dateToStr}.xlsx`);
       return res.send(buffer);
     } catch (err) {
       console.error(err);
@@ -253,18 +264,29 @@ class ReportController {
    * Export Item-wise Sales Report to CSV
    */
   static async exportItemSalesCSV(req, res) {
-    const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
-
     try {
-      const restaurantId = req.user.restaurant_id;
-      const items = await ReportRepository.getItemWiseSalesReport(restaurantId, {
-        dateFrom,
-        dateTo,
-        categoryId: req.query.category_id,
-        search: req.query.search,
-        sortBy: req.query.sort_by,
-        sortOrder: req.query.sort_order
-      });
+      let items;
+      let dateFromStr = '';
+      let dateToStr = '';
+
+      if (req.body && Array.isArray(req.body.items)) {
+        items = req.body.items;
+        dateFromStr = req.query.date_from ? String(req.query.date_from).slice(0, 10) : getISTDateString();
+        dateToStr = req.query.date_to ? String(req.query.date_to).slice(0, 10) : getISTDateString();
+      } else {
+        const { dateFrom, dateTo } = parseAndExpandDates(req.query.date_from, req.query.date_to);
+        dateFromStr = dateFrom.slice(0, 10);
+        dateToStr = dateTo.slice(0, 10);
+        const restaurantId = req.user.restaurant_id;
+        items = await ReportRepository.getItemWiseSalesReport(restaurantId, {
+          dateFrom,
+          dateTo,
+          categoryId: req.query.category_id,
+          search: req.query.search,
+          sortBy: req.query.sort_by,
+          sortOrder: req.query.sort_order
+        });
+      }
 
       let csv = 'Item Name,Category,SKU,Quantity Sold,Gross Sales (Rs),Discount Given (Rs),GST Collected (Rs),Net Sales (Rs),Avg Selling Price (Rs),Last Sold Date\r\n';
       
@@ -278,7 +300,7 @@ class ReportController {
       });
 
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename=item_sales_report_${dateFrom.slice(0, 10)}_to_${dateTo.slice(0, 10)}.csv`);
+      res.setHeader('Content-Disposition', `attachment; filename=item_sales_report_${dateFromStr}_to_${dateToStr}.csv`);
       return res.send(csv);
     } catch (err) {
       console.error(err);
