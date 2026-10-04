@@ -64,6 +64,30 @@ class SerialNumberController {
   }
 
   /**
+   * Get all currently available (in_stock) serial numbers for a specific product
+   */
+  static async getAvailable(req, res) {
+    try {
+      const restaurantId = req.user.restaurant_id;
+      const menuItemId = req.params.menuItemId || req.query.menu_item_id || req.query.product_id || req.query.id;
+      if (!menuItemId) {
+        return res.status(400).json({ error: 'menu_item_id is required.' });
+      }
+
+      const serials = await SerialNumberService.getAvailableSerialsByItem(restaurantId, menuItemId);
+      return res.json({
+        success: true,
+        count: serials.length,
+        serial_numbers: serials,
+        data: serials
+      });
+    } catch (err) {
+      console.error('[SerialNumberController.getAvailable] Error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to fetch available serial numbers.' });
+    }
+  }
+
+  /**
    * Check availability and format of a proposed manual 8-digit Serial Number
    */
   static async checkAvailability(req, res) {

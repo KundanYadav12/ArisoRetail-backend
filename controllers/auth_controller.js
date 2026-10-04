@@ -74,7 +74,7 @@ class AuthController {
 
       let restInfo = {};
       const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, barcode_scanner_enabled, feature_serial_numbers FROM restaurants WHERE id = ?', [targetRestId]);
+      const [rRows] = await pool.query('SELECT name, logo_url, subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled, feature_serial_numbers FROM restaurants WHERE id = ?', [targetRestId]);
       if (rRows.length > 0) restInfo = rRows[0];
 
       let whName = null;
@@ -94,6 +94,11 @@ class AuthController {
         parsedUserPerms = DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS;
       }
 
+      const isSubExpired = Boolean(
+        restInfo.subscription_status === 'expired' ||
+        (restInfo.subscription_expires_at && new Date(restInfo.subscription_expires_at) < new Date())
+      );
+
       return res.json({
         message: 'Login successful',
         accessToken,
@@ -107,9 +112,13 @@ class AuthController {
           restaurant_id: targetRestId,
           restaurant_name: restInfo.name || user.name || 'Ariso Retail Store',
           restaurant_logo_url: restInfo.logo_url || null,
+          subscription_status: isSubExpired ? 'expired' : (restInfo.subscription_status || 'active'),
+          subscription_expires_at: restInfo.subscription_expires_at || null,
+          is_subscription_expired: isSubExpired,
+          support_contact_number: await require('../repositories/platform_settings_repository').getSupportContactNumber().catch(() => ''),
           feature_superbill: Boolean(restInfo.feature_superbill),
           barcode_scanner_enabled: Boolean(restInfo.barcode_scanner_enabled),
-          feature_serial_numbers: restInfo.feature_serial_numbers !== undefined ? Boolean(restInfo.feature_serial_numbers) : true,
+          feature_serial_numbers: isSubExpired ? false : (restInfo.feature_serial_numbers !== undefined ? Boolean(restInfo.feature_serial_numbers) : true),
           shift_id: activeShiftId,
           must_change_password: Boolean(user.must_change_password),
           is_verified: Boolean(user.is_verified),
@@ -149,11 +158,22 @@ class AuthController {
         userPerms = DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS;
       }
 
+      const isSubExpired = Boolean(
+        restaurant && (
+          restaurant.subscription_status === 'expired' || 
+          (restaurant.subscription_expires_at && new Date(restaurant.subscription_expires_at) < new Date())
+        )
+      );
+
       const userProfile = {
         id: user.id,
         restaurant_id: user.restaurant_id,
         restaurant_name: restaurant ? restaurant.name : null,
         restaurant_logo_url: restaurant ? restaurant.logo_url : null,
+        subscription_status: isSubExpired ? 'expired' : (restaurant ? restaurant.subscription_status : 'active'),
+        subscription_expires_at: restaurant ? restaurant.subscription_expires_at : null,
+        is_subscription_expired: isSubExpired,
+        support_contact_number: await require('../repositories/platform_settings_repository').getSupportContactNumber().catch(() => ''),
         name: user.name,
         username: user.username,
         email: user.email,
@@ -164,7 +184,7 @@ class AuthController {
         shift_id: req.user.shift_id || null,
         feature_superbill: restaurant ? Boolean(restaurant.feature_superbill) : false,
         barcode_scanner_enabled: restaurant ? Boolean(restaurant.barcode_scanner_enabled) : false,
-        feature_serial_numbers: restaurant ? (restaurant.feature_serial_numbers !== undefined ? Boolean(restaurant.feature_serial_numbers) : true) : true,
+        feature_serial_numbers: isSubExpired ? false : (restaurant ? (restaurant.feature_serial_numbers !== undefined ? Boolean(restaurant.feature_serial_numbers) : true) : true),
         assigned_warehouse_id: user.assigned_warehouse_id || null,
         assigned_warehouse_name: user.assigned_warehouse_name || null,
         permissions: Array.isArray(userPerms) ? userPerms : []

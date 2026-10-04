@@ -18,6 +18,10 @@ router.get('/lookup', SerialNumberController.lookup);
 // 2. Search / List all Serial Numbers with filters
 router.get('/', SerialNumberController.list);
 
+// 2.1 Available in-stock serial numbers for a specific product item (POS serial selection modal)
+router.get('/available', SerialNumberController.getAvailable);
+router.get('/available/:menuItemId', SerialNumberController.getAvailable);
+
 // 3. Stats (total, in_stock, sold)
 router.get('/stats', SerialNumberController.getStats);
 

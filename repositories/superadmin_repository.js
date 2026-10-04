@@ -2,11 +2,30 @@ const pool = require('../config/db');
 
 class SuperAdminRepository {
   static async getAllRestaurants() {
+    // Auto-disable expired tenants:
+    // Once today's date passes the tenant's Expiry Date, automatically:
+    // - Change that tenant's Status from ACTIVE to EXPIRED
+    // - Move Serial Numbers Tracking toggle automatically to OFF position (0)
+    // Tenants with no Expiry Date (NULL) are exempt.
+    try {
+      await pool.execute(`
+        UPDATE restaurants 
+        SET subscription_status = 'expired', 
+            feature_serial_numbers = 0,
+            updated_at = NOW() 
+        WHERE subscription_expires_at IS NOT NULL 
+          AND subscription_expires_at < NOW() 
+          AND (subscription_status != 'expired' OR feature_serial_numbers != 0)
+      `);
+    } catch (e) {
+      console.warn('[getAllRestaurants] Auto-expiry sync warning:', e.message);
+    }
+
     const [rows] = await pool.execute(
       'SELECT r.*, ' +
       'd.name as distributor_name, ' +
       'l.license_code, ' +
-      'l.activated_at as subscription_start_date, ' +
+      'COALESCE(r.subscription_start_date, l.activated_at, r.created_at) as subscription_start_date, ' +
       'l.current_year_pricing, ' +
       'l.next_year_pricing, ' +
       '(SELECT COUNT(*) FROM users u WHERE u.restaurant_id = r.id) as userCount, ' +
@@ -40,14 +59,14 @@ class SuperAdminRepository {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
       subscription_status, duration_months, feature_superbill, barcode_scanner_enabled,
-      feature_serial_numbers
+      feature_serial_numbers, subscription_start_date, subscription_expires_at
     } = restaurant;
 
     const months = parseInt(duration_months || 12);
     
     const [result] = await pool.execute(
-      'INSERT INTO restaurants (name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile, gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit, subscription_status, feature_superbill, barcode_scanner_enabled, feature_serial_numbers, subscription_start_at, subscription_expires_at, created_at) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? MONTH), NOW())',
+      'INSERT INTO restaurants (name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile, gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit, subscription_status, feature_superbill, barcode_scanner_enabled, feature_serial_numbers, subscription_start_date, subscription_expires_at, created_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, NOW()), COALESCE(?, DATE_ADD(NOW(), INTERVAL ? MONTH)), NOW())',
       [
         name, domain || null, logo_url || null, address || null, phone || null,
         email || owner_email || null, owner_name || null, owner_email || null, owner_mobile || null,
@@ -55,7 +74,7 @@ class SuperAdminRepository {
         max_cashier_limit || 3, subscription_status || 'trial',
         feature_superbill ? 1 : 0, barcode_scanner_enabled ? 1 : 0,
         feature_serial_numbers !== undefined ? (feature_serial_numbers ? 1 : 0) : 1,
-        months
+        subscription_start_date || null, subscription_expires_at || null, months
       ]
     );
     return result.insertId;
@@ -65,23 +84,54 @@ class SuperAdminRepository {
     const {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-      subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
+      subscription_status, subscription_start_date, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
       feature_serial_numbers
     } = restaurant;
 
+    // Check expiry logic:
+    // If expiry date is in the past, auto-disable: status = 'expired', feature_serial_numbers = 0
+    let finalStatus = subscription_status || 'trial';
+    let finalSerialNumbers = feature_serial_numbers !== undefined ? (feature_serial_numbers ? 1 : 0) : 1;
+
+    if (subscription_expires_at) {
+      const expDate = new Date(subscription_expires_at);
+      if (!isNaN(expDate.getTime())) {
+        if (expDate < new Date()) {
+          finalStatus = 'expired';
+          finalSerialNumbers = 0;
+        } else if (finalStatus === 'expired') {
+          // If extending an expired subscription to the future, restore to active
+          finalStatus = 'active';
+        }
+      }
+    }
+
     const [result] = await pool.execute(
-      'UPDATE restaurants SET name = ?, domain = ?, logo_url = ?, address = ?, phone = ?, email = ?, owner_name = ?, owner_email = ?, owner_mobile = ?, gst_number = ?, subscription_plan_id = ?, max_user_limit = ?, max_manager_limit = ?, max_cashier_limit = ?, subscription_status = ?, subscription_expires_at = ?, feature_superbill = ?, barcode_scanner_enabled = ?, feature_serial_numbers = ?, updated_at = NOW() WHERE id = ?',
+      'UPDATE restaurants SET name = ?, domain = ?, logo_url = ?, address = ?, phone = ?, email = ?, owner_name = ?, owner_email = ?, owner_mobile = ?, gst_number = ?, subscription_plan_id = ?, max_user_limit = ?, max_manager_limit = ?, max_cashier_limit = ?, subscription_status = ?, subscription_start_date = ?, subscription_expires_at = ?, feature_superbill = ?, barcode_scanner_enabled = ?, feature_serial_numbers = ?, updated_at = NOW() WHERE id = ?',
       [
         name, domain || null, logo_url || null, address || null, phone || null,
         email || null, owner_name || null, owner_email || null, owner_mobile || null,
         gst_number || null, subscription_plan_id || 1, max_user_limit || 5, max_manager_limit || 2,
-        max_cashier_limit || 3, subscription_status || 'trial', subscription_expires_at || null,
+        max_cashier_limit || 3, finalStatus, subscription_start_date || null, subscription_expires_at || null,
         feature_superbill !== undefined ? (feature_superbill ? 1 : 0) : 0,
         barcode_scanner_enabled !== undefined ? (barcode_scanner_enabled ? 1 : 0) : 0,
-        feature_serial_numbers !== undefined ? (feature_serial_numbers ? 1 : 0) : 1,
+        finalSerialNumbers,
         id
       ]
     );
+
+    // If a linked license exists, synchronize activated_at with subscription_start_date
+    if (subscription_start_date) {
+      try {
+        await pool.execute(
+          'UPDATE licenses SET activated_at = ?, updated_at = NOW() WHERE restaurant_id = ?',
+          [subscription_start_date, id]
+        );
+      } catch (licErr) {
+        console.warn('[updateRestaurant] License sync warning:', licErr.message);
+      }
+    }
+
     return result.affectedRows > 0;
   }
 

@@ -267,40 +267,49 @@ class SerialNumberService {
         const qty = Math.max(1, Math.floor(parseFloat(it.quantity || 1)));
         const salePrice = parseFloat(it.price || it.unit_price || 0);
 
-        // Case 1: Specific serial number was scanned / provided in line item
-        if (it.serial_number && String(it.serial_number).trim()) {
-          const cleanSerial = String(it.serial_number).trim();
-          await connection.execute(`
-            UPDATE product_serial_numbers 
-            SET status = 'sold',
-                order_id = ?,
-                sales_invoice_number = ?,
-                sale_date = ?,
-                customer_id = ?,
-                customer_name = ?,
-                customer_phone = ?,
-                sale_price = ?,
-                warranty_start_date = CASE 
-                  WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 
-                  THEN DATE(?) 
-                  ELSE NULL 
-                END,
-                warranty_end_date = CASE 
-                  WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 AND warranty_duration_unit = 'years' 
-                    THEN DATE(DATE_ADD(?, INTERVAL warranty_duration_value YEAR))
-                  WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 
-                    THEN DATE(DATE_ADD(?, INTERVAL warranty_duration_value MONTH))
-                  ELSE NULL 
-                END,
-                updated_at = NOW()
-            WHERE restaurant_id = ? AND serial_number = ?
-          `, [
-            orderId, invoiceNo, effectiveSaleDate,
-            customerId || null, customerName || null, customerPhone || null,
-            salePrice,
-            effectiveSaleDate, effectiveSaleDate, effectiveSaleDate,
-            restaurantId, cleanSerial
-          ]);
+        // Case 1: Specific serial number(s) provided in line item
+        const serialsToProcess = [];
+        if (Array.isArray(it.serial_numbers) && it.serial_numbers.length > 0) {
+          serialsToProcess.push(...it.serial_numbers.map(s => String(s).trim()).filter(Boolean));
+        } else if (it.serial_number && String(it.serial_number).trim()) {
+          const parts = String(it.serial_number).split(',').map(s => s.trim().replace(/^SN:\s*/i, '')).filter(Boolean);
+          serialsToProcess.push(...parts);
+        }
+
+        if (serialsToProcess.length > 0) {
+          for (const cleanSerial of serialsToProcess) {
+            await connection.execute(`
+              UPDATE product_serial_numbers 
+              SET status = 'sold',
+                  order_id = ?,
+                  sales_invoice_number = ?,
+                  sale_date = ?,
+                  customer_id = ?,
+                  customer_name = ?,
+                  customer_phone = ?,
+                  sale_price = ?,
+                  warranty_start_date = CASE 
+                    WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 
+                    THEN DATE(?) 
+                    ELSE NULL 
+                  END,
+                  warranty_end_date = CASE 
+                    WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 AND warranty_duration_unit = 'years' 
+                      THEN DATE(DATE_ADD(?, INTERVAL warranty_duration_value YEAR))
+                    WHEN warranty_duration_value IS NOT NULL AND warranty_duration_value > 0 
+                      THEN DATE(DATE_ADD(?, INTERVAL warranty_duration_value MONTH))
+                    ELSE NULL 
+                  END,
+                  updated_at = NOW()
+              WHERE restaurant_id = ? AND serial_number = ?
+            `, [
+              orderId, invoiceNo, effectiveSaleDate,
+              customerId || null, customerName || null, customerPhone || null,
+              salePrice,
+              effectiveSaleDate, effectiveSaleDate, effectiveSaleDate,
+              restaurantId, cleanSerial
+            ]);
+          }
           continue;
         }
 
@@ -553,6 +562,98 @@ class SerialNumberService {
         OR psn.supplier_name LIKE ?
       )`;
       params.push(s, s, s, s, s, s, s);
+    }
+
+    // ── Column-Wise Granular Filters (AND logic) ──────────────────
+    const {
+      col_serial_number,
+      col_product_item,
+      col_sku_barcode,
+      col_purchase_date_from,
+      col_purchase_date_to,
+      col_purchase_invoice,
+      col_sale_date_from,
+      col_sale_date_to,
+      col_sales_invoice,
+      col_status,
+      col_warranty_start_from,
+      col_warranty_start_to,
+      col_warranty_end_from,
+      col_warranty_end_to
+    } = filters;
+
+    if (col_serial_number && String(col_serial_number).trim()) {
+      query += ' AND psn.serial_number LIKE ?';
+      params.push(`%${String(col_serial_number).trim()}%`);
+    }
+
+    if (col_product_item && String(col_product_item).trim()) {
+      const prodVal = String(col_product_item).trim();
+      if (!isNaN(prodVal) && Number(prodVal) > 0) {
+        query += ' AND psn.menu_item_id = ?';
+        params.push(Number(prodVal));
+      } else {
+        query += ' AND (mi.name LIKE ? OR mi.sku LIKE ?)';
+        params.push(`%${prodVal}%`, `%${prodVal}%`);
+      }
+    }
+
+    if (col_sku_barcode && String(col_sku_barcode).trim()) {
+      query += ' AND (mi.sku LIKE ? OR mi.barcode LIKE ?)';
+      const sb = `%${String(col_sku_barcode).trim()}%`;
+      params.push(sb, sb);
+    }
+
+    if (col_purchase_date_from && String(col_purchase_date_from).trim()) {
+      query += ' AND DATE(psn.purchase_date) >= ?';
+      params.push(String(col_purchase_date_from).trim());
+    }
+    if (col_purchase_date_to && String(col_purchase_date_to).trim()) {
+      query += ' AND DATE(psn.purchase_date) <= ?';
+      params.push(String(col_purchase_date_to).trim());
+    }
+
+    if (col_purchase_invoice && String(col_purchase_invoice).trim()) {
+      query += ' AND psn.purchase_invoice_number LIKE ?';
+      params.push(`%${String(col_purchase_invoice).trim()}%`);
+    }
+
+    if (col_sale_date_from && String(col_sale_date_from).trim()) {
+      query += ' AND DATE(psn.sale_date) >= ?';
+      params.push(String(col_sale_date_from).trim());
+    }
+    if (col_sale_date_to && String(col_sale_date_to).trim()) {
+      query += ' AND DATE(psn.sale_date) <= ?';
+      params.push(String(col_sale_date_to).trim());
+    }
+
+    if (col_sales_invoice && String(col_sales_invoice).trim()) {
+      const si = `%${String(col_sales_invoice).trim()}%`;
+      query += ' AND (psn.sales_invoice_number LIKE ? OR o.unique_order_number LIKE ?)';
+      params.push(si, si);
+    }
+
+    if (col_status && col_status !== 'all') {
+      query += ' AND psn.status = ?';
+      params.push(col_status);
+    }
+
+    if (col_warranty_start_from && String(col_warranty_start_from).trim()) {
+      query += ' AND DATE(psn.warranty_start_date) >= ?';
+      params.push(String(col_warranty_start_from).trim());
+    }
+    if (col_warranty_start_to && String(col_warranty_start_to).trim()) {
+      query += ' AND DATE(psn.warranty_start_date) <= ?';
+      params.push(String(col_warranty_start_to).trim());
+    }
+
+    if (col_warranty_end_from && String(col_warranty_end_from).trim()) {
+      query += ' AND DATE(psn.warranty_end_date) >= ?';
+      params.push(String(col_warranty_end_from).trim());
+    }
+    if (col_warranty_end_to && String(col_warranty_end_to).trim()) {
+      query += ' AND DATE(psn.warranty_end_date) <= ?';
+      params.push(String(col_warranty_end_to).trim());
     }
 
     // Count total
@@ -861,6 +962,47 @@ class SerialNumberService {
     cmds += `${GS}V\x41\x00`;
 
     return cmds;
+  }
+
+  /**
+   * Get all currently available (in_stock) serial numbers for a specific product
+   */
+  static async getAvailableSerialsByItem(restaurantId, menuItemId) {
+    if (!menuItemId) return [];
+    const [rows] = await pool.query(`
+      SELECT 
+        psn.id, 
+        psn.serial_number, 
+        psn.menu_item_id, 
+        psn.warehouse_id, 
+        psn.status,
+        psn.purchase_date,
+        psn.purchase_invoice_number,
+        psn.supplier_name,
+        psn.warranty_duration_value,
+        psn.warranty_duration_unit,
+        w.name as warehouse_name
+      FROM product_serial_numbers psn
+      LEFT JOIN warehouses w ON psn.warehouse_id = w.id
+      WHERE psn.restaurant_id = ? 
+        AND psn.menu_item_id = ? 
+        AND psn.status = 'in_stock'
+      ORDER BY psn.id ASC
+    `, [restaurantId, menuItemId]);
+
+    return rows.map(r => ({
+      id: r.id,
+      serial_number: r.serial_number,
+      menu_item_id: r.menu_item_id,
+      warehouse_id: r.warehouse_id,
+      warehouse_name: r.warehouse_name || 'Main Warehouse',
+      status: r.status,
+      purchase_date: this.formatDate(r.purchase_date),
+      purchase_invoice: r.purchase_invoice_number || 'N/A',
+      supplier_name: r.supplier_name || 'N/A',
+      warranty_duration_value: r.warranty_duration_value,
+      warranty_duration_unit: r.warranty_duration_unit
+    }));
   }
 }
 

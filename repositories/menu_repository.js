@@ -50,7 +50,7 @@ class MenuRepository {
   static async create(restaurantId, item) {
     const {
       category_id, name, sku, barcode, description, price, wholesale_price, purchase_price,
-      is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category,
+      is_weight_based, pos_unit_type, is_serial_tracked, base_unit, min_sale_qty, max_sale_qty, sub_category,
       gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url,
       seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory,
       goods_or_service, item_code, hsn_code, purchase_unit, sales_unit, brand, item_group, tags,
@@ -59,12 +59,19 @@ class MenuRepository {
       open_qty_popup, open_price_popup, not_for_sale
     } = item;
 
+    let resolvedPosUnitType = (pos_unit_type || item.item_type || item.itemType || '').toUpperCase().trim();
+    if (!resolvedPosUnitType) {
+      resolvedPosUnitType = is_weight_based === 1 ? 'WEIGHT' : (is_serial_tracked === 1 ? 'SERIAL' : 'PCS');
+    }
+    const isWeightFinal = resolvedPosUnitType === 'WEIGHT' ? 1 : 0;
+    const isSerialFinal = resolvedPosUnitType === 'SERIAL' ? 1 : (is_serial_tracked !== undefined ? (is_serial_tracked ? 1 : 0) : 0);
+
     const initialStock = current_stock !== undefined ? current_stock : (opening_stock !== undefined ? opening_stock : 100.00);
 
     const [result] = await pool.execute(
       `INSERT INTO menu_items (
         restaurant_id, category_id, name, sku, barcode, description, price, wholesale_price, purchase_price,
-        is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category, gst_rate,
+        is_weight_based, pos_unit_type, is_serial_tracked, base_unit, min_sale_qty, max_sale_qty, sub_category, gst_rate,
         prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url, seq, kitchen_category,
         printer_id, unit, current_stock, low_stock_threshold, track_inventory,
         goods_or_service, item_code, hsn_code, purchase_unit, sales_unit, brand, item_group, tags,
@@ -73,7 +80,7 @@ class MenuRepository {
         open_qty_popup, open_price_popup, not_for_sale
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?,
@@ -91,7 +98,9 @@ class MenuRepository {
         price !== undefined ? price : 0,
         wholesale_price !== undefined ? wholesale_price : null,
         purchase_price !== undefined ? purchase_price : 0.00,
-        is_weight_based === 1 ? 1 : 0,
+        isWeightFinal,
+        resolvedPosUnitType,
+        isSerialFinal,
         base_unit || unit || 'pcs',
         min_sale_qty !== undefined ? min_sale_qty : 0.001,
         max_sale_qty !== undefined ? max_sale_qty : 1000.000,
@@ -141,7 +150,7 @@ class MenuRepository {
   static async update(id, restaurantId, item) {
     const {
       category_id, name, sku, barcode, description, price, wholesale_price, purchase_price,
-      is_weight_based, base_unit, min_sale_qty, max_sale_qty, sub_category,
+      is_weight_based, pos_unit_type, is_serial_tracked, base_unit, min_sale_qty, max_sale_qty, sub_category,
       gst_rate, prep_time_minutes, is_veg, spicy_level, is_available, image_url, barcode_image_url,
       seq, kitchen_category, printer_id, unit, current_stock, low_stock_threshold, track_inventory,
       goods_or_service, item_code, hsn_code, purchase_unit, sales_unit, brand, item_group, tags,
@@ -150,10 +159,26 @@ class MenuRepository {
       open_qty_popup, open_price_popup, not_for_sale
     } = item;
 
+    let resolvedPosUnitType = pos_unit_type ? String(pos_unit_type).toUpperCase().trim() : (item.item_type || item.itemType ? String(item.item_type || item.itemType).toUpperCase().trim() : null);
+    let resolvedIsWeight = is_weight_based !== undefined ? (is_weight_based === 1 || is_weight_based === true || is_weight_based === '1' ? 1 : 0) : null;
+    let resolvedIsSerial = is_serial_tracked !== undefined ? (is_serial_tracked === 1 || is_serial_tracked === true || is_serial_tracked === '1' ? 1 : 0) : null;
+
+    if (resolvedPosUnitType === 'SERIAL') {
+      resolvedIsSerial = 1;
+      resolvedIsWeight = 0;
+    } else if (resolvedPosUnitType === 'WEIGHT') {
+      resolvedIsWeight = 1;
+      resolvedIsSerial = 0;
+    } else if (resolvedPosUnitType === 'PCS') {
+      resolvedIsWeight = 0;
+      resolvedIsSerial = 0;
+    }
+
     const [result] = await pool.execute(
       `UPDATE menu_items SET
         category_id = ?, name = ?, sku = ?, barcode = ?, description = ?, price = ?, wholesale_price = ?,
-        purchase_price = ?, is_weight_based = ?, base_unit = ?, min_sale_qty = ?,
+        purchase_price = ?, is_weight_based = COALESCE(?, is_weight_based), pos_unit_type = COALESCE(?, pos_unit_type),
+        is_serial_tracked = COALESCE(?, is_serial_tracked), base_unit = ?, min_sale_qty = ?,
         max_sale_qty = ?, sub_category = ?, gst_rate = ?, prep_time_minutes = ?,
         is_veg = ?, spicy_level = ?, is_available = ?, image_url = ?, barcode_image_url = COALESCE(?, barcode_image_url), seq = ?,
         kitchen_category = ?, printer_id = ?, unit = COALESCE(?, unit),
@@ -192,7 +217,9 @@ class MenuRepository {
         price !== undefined ? price : 0,
         wholesale_price !== undefined ? wholesale_price : null,
         purchase_price !== undefined ? purchase_price : 0.00,
-        is_weight_based === 1 ? 1 : 0,
+        resolvedIsWeight,
+        resolvedPosUnitType,
+        resolvedIsSerial,
         base_unit || unit || 'pcs',
         min_sale_qty !== undefined ? min_sale_qty : 0.001,
         max_sale_qty !== undefined ? max_sale_qty : 1000.000,

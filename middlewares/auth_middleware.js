@@ -56,11 +56,31 @@ async function authenticateToken(req, res, next) {
       const expires = user.subscription_expires_at ? new Date(user.subscription_expires_at) : null;
 
       if (user.subscription_status === 'suspended' || user.subscription_status === 'cancelled') {
-        return res.status(403).json({ error: 'Your restaurant tenant subscription has been suspended. Contact support.' });
+        return res.status(403).json({ 
+          error: 'Your restaurant tenant subscription has been suspended. Contact support.',
+          code: 'SUBSCRIPTION_SUSPENDED'
+        });
       }
 
-      if (user.subscription_status === 'expired' || (expires && expires < now)) {
-        return res.status(403).json({ error: 'Your restaurant tenant subscription has expired. Please renew.' });
+      const isExpired = user.subscription_status === 'expired' || (expires && expires < now);
+      if (isExpired) {
+        // Auto-disable on expiry: change status to expired and feature_serial_numbers to 0 in DB
+        if (user.subscription_status !== 'expired' || user.feature_serial_numbers !== 0) {
+          pool.execute(
+            'UPDATE restaurants SET subscription_status = "expired", feature_serial_numbers = 0, updated_at = NOW() WHERE id = ?',
+            [user.restaurant_id]
+          ).catch(err => console.error('[AutoDisableExpiry] Error:', err.message));
+        }
+
+        // Allow session verification endpoints so frontend can render the expired banner & user info
+        const isSessionCheckPath = (req.baseUrl === '/api/auth' && (req.path === '/me' || req.path === '/profile')) ||
+                                   req.path === '/api/auth/me' || req.path === '/api/profile';
+        if (!isSessionCheckPath) {
+          return res.status(403).json({ 
+            error: 'Your account has expired. Please contact support to renew.',
+            code: 'SUBSCRIPTION_EXPIRED'
+          });
+        }
       }
     }
 
@@ -275,9 +295,9 @@ function requireSuperAdminOrPermission(permissionKey = 'serial_numbers') {
       });
     }
 
-    // Explicitly granted permission by Super Admin / Tenant Admin
+    // Explicitly granted permission by Super Admin / Tenant Admin, or POS roles
     const permissions = Array.isArray(req.user.permissions) ? req.user.permissions : [];
-    if (role === 'admin' || permissions.includes(permissionKey) || permissions.includes('all')) {
+    if (role === 'admin' || role === 'cashier' || role === 'manager' || role === 'salesman' || permissions.includes(permissionKey) || permissions.includes('all')) {
       return next();
     }
 

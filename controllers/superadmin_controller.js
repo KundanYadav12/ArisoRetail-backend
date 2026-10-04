@@ -120,10 +120,19 @@ class SuperAdminController {
     const {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-      subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
+      subscription_status, subscription_start_date, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
       feature_serial_numbers
     } = req.body;
     const restaurantId = req.params.id;
+
+    // Validation: Expiry Date must be after Start Date
+    if (subscription_start_date && subscription_expires_at) {
+      const startDate = new Date(subscription_start_date);
+      const expiryDate = new Date(subscription_expires_at);
+      if (!isNaN(startDate.getTime()) && !isNaN(expiryDate.getTime()) && expiryDate <= startDate) {
+        return res.status(400).json({ error: 'Expiry Date must be after Start Date.' });
+      }
+    }
 
     try {
       const existingRest = await SuperAdminRepository.getRestaurantById(restaurantId);
@@ -133,7 +142,7 @@ class SuperAdminController {
       const success = await SuperAdminRepository.updateRestaurant(restaurantId, {
         name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
         gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
-        subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
+        subscription_status, subscription_start_date, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
         feature_serial_numbers
       });
 
@@ -324,6 +333,41 @@ class SuperAdminController {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to retrieve logs.' });
+    }
+  }
+
+  /**
+   * Platform-wide Support Contact Number (shown in tenant expired banner)
+   */
+  static async getSupportContact(req, res) {
+    try {
+      const PlatformSettingsRepository = require('../repositories/platform_settings_repository');
+      const support_contact_number = await PlatformSettingsRepository.getSupportContactNumber();
+      return res.json({ support_contact_number });
+    } catch (err) {
+      console.error('[SuperAdminController.getSupportContact Error]', err);
+      return res.status(500).json({ error: 'Failed to retrieve support contact number.' });
+    }
+  }
+
+  static async updateSupportContact(req, res) {
+    try {
+      const PlatformSettingsRepository = require('../repositories/platform_settings_repository');
+      const value = String((req.body && req.body.support_contact_number) || '').trim();
+      if (value.length > 50) {
+        return res.status(400).json({ error: 'Support contact number is too long.' });
+      }
+      if (value && !/^[0-9+\-()\s]{4,50}$/.test(value)) {
+        return res.status(400).json({ error: 'Enter a valid phone number (digits, +, -, spaces, parentheses).' });
+      }
+      await PlatformSettingsRepository.setSupportContactNumber(value);
+      try {
+        await SuperAdminRepository.addAuditLog(null, req.user.id, 'SUPPORT_CONTACT_UPDATE', `Updated support contact number to "${value || '(cleared)'}"`, req.ip);
+      } catch (_) {}
+      return res.json({ message: 'Support contact number updated.', support_contact_number: value });
+    } catch (err) {
+      console.error('[SuperAdminController.updateSupportContact Error]', err);
+      return res.status(500).json({ error: 'Failed to update support contact number.' });
     }
   }
 

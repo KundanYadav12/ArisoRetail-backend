@@ -832,22 +832,23 @@ class MenuController {
 
 
   /**
-   * GET /api/menu/check-barcode?sku=XXX&exclude_id=123
-   * Check if a barcode/SKU is already assigned to another item in the store.
+   * GET /api/menu/check-barcode?barcode=XXX&sku=YYY&exclude_id=123
+   * Check if a barcode or SKU is already assigned to another item in the store.
    * Used by the Add/Edit Item form to show inline duplicate warning.
    */
   static async checkBarcodeDuplicate(req, res) {
     try {
       const restaurantId = req.user.restaurant_id;
-      const { sku, exclude_id } = req.query;
+      const { barcode, sku, exclude_id } = req.query;
+      const codeToCheck = (barcode || sku || '').trim();
 
-      if (!sku || !sku.trim()) {
+      if (!codeToCheck) {
         return res.json({ duplicate: false });
       }
 
       const pool = require('../config/db');
-      let query = 'SELECT id, name FROM menu_items WHERE restaurant_id = ? AND (sku = ? OR barcode = ?)';
-      const params = [restaurantId, sku.trim(), sku.trim()];
+      let query = 'SELECT id, name FROM menu_items WHERE restaurant_id = ? AND (barcode = ? OR sku = ?)';
+      const params = [restaurantId, codeToCheck, codeToCheck];
 
       if (exclude_id) {
         query += ' AND id != ?';

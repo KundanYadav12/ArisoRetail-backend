@@ -19,6 +19,8 @@ router.patch('/restaurants/:id/toggle-barcode-scanner', SuperAdminController.tog
 router.patch('/restaurants/:id/toggle-serial-numbers', SuperAdminController.toggleSerialNumbers);
 router.get('/plans', SuperAdminController.getSubscriptionPlans);
 router.get('/logs', SuperAdminController.getLogs);
+router.get('/support-contact', SuperAdminController.getSupportContact);
+router.put('/support-contact', SuperAdminController.updateSupportContact);
 
 // Distributor Management Routes
 router.get('/distributors', SuperAdminController.getDistributors);
