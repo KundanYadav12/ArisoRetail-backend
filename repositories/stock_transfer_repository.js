@@ -18,6 +18,7 @@ class StockTransferRepository {
         w_dest.code as destination_warehouse_code,
         sr.request_number,
         COUNT(sti.id) as total_items,
+        COUNT(sti.id) as item_count,
         COALESCE(SUM(sti.sent_qty), 0) as total_sent_qty,
         COALESCE(SUM(sti.received_qty), 0) as total_received_qty,
         COALESCE(SUM(sti.damaged_qty), 0) as total_damaged_qty
@@ -172,15 +173,37 @@ class StockTransferRepository {
         const sourceRackId = item.source_rack_id || null;
         const destinationRackId = item.destination_rack_id || null;
 
+        let itemName = (item.item_name || item.name || '').trim();
+        let itemUnit = (item.unit || '').trim();
+
+        if (!itemName || !itemUnit) {
+          const [mRows] = await connection.execute(
+            'SELECT name, unit FROM menu_items WHERE id = ?',
+            [menuItemId]
+          );
+          if (mRows.length > 0) {
+            if (!itemName) itemName = mRows[0].name;
+            if (!itemUnit) itemUnit = mRows[0].unit || 'pcs';
+          }
+        }
+        if (!itemName) itemName = `Item #${menuItemId}`;
+        if (!itemUnit) itemUnit = 'pcs';
+
+        const batchNumber = item.batch_number && String(item.batch_number).trim() !== '' ? String(item.batch_number).trim() : null;
+        const expiryDate = item.expiry_date && String(item.expiry_date).trim() !== '' ? String(item.expiry_date).trim() : null;
+        const itemNotes = item.notes && String(item.notes).trim() !== '' ? String(item.notes).trim() : null;
+
         await connection.execute(`
           INSERT INTO stock_transfer_items (
             stock_transfer_id, menu_item_id, item_name, unit,
-            sent_qty, received_qty, damaged_qty, unit_cost, notes,
+            sent_qty, received_qty, damaged_qty, unit_cost,
+            batch_number, expiry_date, notes,
             source_rack_id, destination_rack_id
-          ) VALUES (?, ?, ?, ?, ?, 0.000, 0.000, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, 0.000, 0.000, ?, ?, ?, ?, ?, ?)
         `, [
-          transferId, menuItemId, item.item_name || item.name,
-          item.unit || 'pcs', sentQty, unitCost, item.notes || null,
+          transferId, menuItemId, itemName,
+          itemUnit, sentQty, unitCost,
+          batchNumber, expiryDate, itemNotes,
           sourceRackId, destinationRackId
         ]);
 

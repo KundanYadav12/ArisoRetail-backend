@@ -22,7 +22,7 @@ async function authenticateToken(req, res, next) {
     
     // Fetch user details to verify state
     const [rows] = await pool.execute(
-      'SELECT u.id, u.restaurant_id, u.name, u.username, u.role, u.assigned_warehouse_id, u.permissions, u.is_active, u.active_session_id, r.subscription_status, r.subscription_expires_at, r.name as restaurant_name, r.feature_serial_numbers ' +
+      'SELECT u.id, u.restaurant_id, u.name, u.username, u.role, u.assigned_warehouse_id, u.permissions, u.is_active, u.active_session_id, r.subscription_status, r.subscription_expires_at, r.name as restaurant_name, r.feature_serial_numbers, r.reconciliation_enabled ' +
       'FROM users u LEFT JOIN restaurants r ON u.restaurant_id = r.id ' +
       'WHERE u.id = ? AND u.is_active = 1',
       [decoded.id]
@@ -107,6 +107,7 @@ async function authenticateToken(req, res, next) {
       assigned_warehouse_id: user.assigned_warehouse_id || null,
       permissions: Array.isArray(parsedPermissions) ? parsedPermissions : [],
       feature_serial_numbers: user.feature_serial_numbers !== undefined ? Boolean(user.feature_serial_numbers) : true,
+      reconciliation_enabled: Boolean(user.reconciliation_enabled),
       shift_id: decoded.shift_id
     };
 
@@ -292,6 +293,13 @@ function requireSuperAdminOrPermission(permissionKey = 'serial_numbers') {
     if (permissionKey === 'serial_numbers' && req.user.feature_serial_numbers === false) {
       return res.status(403).json({
         error: "Access Denied: Product Serial Number Tracking is disabled for this store by Super Administrator."
+      });
+    }
+
+    // Check store-level feature permission if key is payment_reconciliation
+    if (permissionKey === 'payment_reconciliation' && !req.user.reconciliation_enabled) {
+      return res.status(403).json({
+        error: "Access Denied: Payment Reconciliation is disabled for this store by Super Administrator."
       });
     }
 

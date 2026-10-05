@@ -59,14 +59,14 @@ class SuperAdminRepository {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
       subscription_status, duration_months, feature_superbill, barcode_scanner_enabled,
-      feature_serial_numbers, subscription_start_date, subscription_expires_at
+      feature_serial_numbers, reconciliation_enabled, subscription_start_date, subscription_expires_at
     } = restaurant;
 
     const months = parseInt(duration_months || 12);
     
     const [result] = await pool.execute(
-      'INSERT INTO restaurants (name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile, gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit, subscription_status, feature_superbill, barcode_scanner_enabled, feature_serial_numbers, subscription_start_date, subscription_expires_at, created_at) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, NOW()), COALESCE(?, DATE_ADD(NOW(), INTERVAL ? MONTH)), NOW())',
+      'INSERT INTO restaurants (name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile, gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit, subscription_status, feature_superbill, barcode_scanner_enabled, feature_serial_numbers, reconciliation_enabled, subscription_start_date, subscription_expires_at, created_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, NOW()), COALESCE(?, DATE_ADD(NOW(), INTERVAL ? MONTH)), NOW())',
       [
         name, domain || null, logo_url || null, address || null, phone || null,
         email || owner_email || null, owner_name || null, owner_email || null, owner_mobile || null,
@@ -74,6 +74,7 @@ class SuperAdminRepository {
         max_cashier_limit || 3, subscription_status || 'trial',
         feature_superbill ? 1 : 0, barcode_scanner_enabled ? 1 : 0,
         feature_serial_numbers !== undefined ? (feature_serial_numbers ? 1 : 0) : 1,
+        reconciliation_enabled !== undefined ? (reconciliation_enabled ? 1 : 0) : 0,
         subscription_start_date || null, subscription_expires_at || null, months
       ]
     );
@@ -85,13 +86,14 @@ class SuperAdminRepository {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
       subscription_status, subscription_start_date, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
-      feature_serial_numbers
+      feature_serial_numbers, reconciliation_enabled
     } = restaurant;
 
     // Check expiry logic:
     // If expiry date is in the past, auto-disable: status = 'expired', feature_serial_numbers = 0
     let finalStatus = subscription_status || 'trial';
     let finalSerialNumbers = feature_serial_numbers !== undefined ? (feature_serial_numbers ? 1 : 0) : 1;
+    let finalReconciliation = reconciliation_enabled !== undefined ? (reconciliation_enabled ? 1 : 0) : null;
 
     if (subscription_expires_at) {
       const expDate = new Date(subscription_expires_at);
@@ -107,7 +109,7 @@ class SuperAdminRepository {
     }
 
     const [result] = await pool.execute(
-      'UPDATE restaurants SET name = ?, domain = ?, logo_url = ?, address = ?, phone = ?, email = ?, owner_name = ?, owner_email = ?, owner_mobile = ?, gst_number = ?, subscription_plan_id = ?, max_user_limit = ?, max_manager_limit = ?, max_cashier_limit = ?, subscription_status = ?, subscription_start_date = ?, subscription_expires_at = ?, feature_superbill = ?, barcode_scanner_enabled = ?, feature_serial_numbers = ?, updated_at = NOW() WHERE id = ?',
+      'UPDATE restaurants SET name = ?, domain = ?, logo_url = ?, address = ?, phone = ?, email = ?, owner_name = ?, owner_email = ?, owner_mobile = ?, gst_number = ?, subscription_plan_id = ?, max_user_limit = ?, max_manager_limit = ?, max_cashier_limit = ?, subscription_status = ?, subscription_start_date = ?, subscription_expires_at = ?, feature_superbill = ?, barcode_scanner_enabled = ?, feature_serial_numbers = ?, reconciliation_enabled = COALESCE(?, reconciliation_enabled), updated_at = NOW() WHERE id = ?',
       [
         name, domain || null, logo_url || null, address || null, phone || null,
         email || null, owner_name || null, owner_email || null, owner_mobile || null,
@@ -116,6 +118,7 @@ class SuperAdminRepository {
         feature_superbill !== undefined ? (feature_superbill ? 1 : 0) : 0,
         barcode_scanner_enabled !== undefined ? (barcode_scanner_enabled ? 1 : 0) : 0,
         finalSerialNumbers,
+        finalReconciliation,
         id
       ]
     );
@@ -154,6 +157,14 @@ class SuperAdminRepository {
   static async toggleSerialNumbersPermission(id, enabled) {
     const [result] = await pool.execute(
       'UPDATE restaurants SET feature_serial_numbers = ?, updated_at = NOW() WHERE id = ?',
+      [enabled ? 1 : 0, id]
+    );
+    return result.affectedRows > 0;
+  }
+
+  static async toggleReconciliationPermission(id, enabled) {
+    const [result] = await pool.execute(
+      'UPDATE restaurants SET reconciliation_enabled = ?, updated_at = NOW() WHERE id = ?',
       [enabled ? 1 : 0, id]
     );
     return result.affectedRows > 0;

@@ -51,6 +51,10 @@ class ProfileController {
         return res.status(400).json({ error: 'Restaurant ID is required.' });
       }
 
+      if (req.body.reconciliation_enabled !== undefined && req.user?.role !== 'super_admin' && req.user?.role !== 'superadmin') {
+        return res.status(403).json({ error: 'Permission Denied: Only Super Admin can modify Payment Reconciliation permission.' });
+      }
+
       const { name, logo_url, address, phone, email, gst_number } = req.body;
 
       if (name !== undefined && !name.trim()) {

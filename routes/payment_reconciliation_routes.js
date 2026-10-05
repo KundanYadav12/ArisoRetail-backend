@@ -4,8 +4,24 @@ const PaymentReconciliationController = require('../controllers/payment_reconcil
 
 const router = express.Router();
 
-// All payment reconciliation endpoints require authenticated session
-router.use(authenticateToken);
+// Middleware to enforce Super Admin-controlled Reconciliation feature flag
+const enforceReconciliationFeature = (req, res, next) => {
+  const role = (req.user?.role || '').toLowerCase();
+  if (['super_admin', 'superadmin'].includes(role)) {
+    return next();
+  }
+  if (!req.user || !req.user.reconciliation_enabled) {
+    return res.status(403).json({
+      success: false,
+      error: 'Access Denied: Payment Reconciliation module is disabled for this store by Super Administrator.',
+      code: 'RECONCILIATION_DISABLED'
+    });
+  }
+  next();
+};
+
+// All payment reconciliation endpoints require authenticated session and enabled tenant feature flag
+router.use(authenticateToken, enforceReconciliationFeature);
 
 // 1. Overview and Summary Metrics
 router.get('/overview', PaymentReconciliationController.getOverview);

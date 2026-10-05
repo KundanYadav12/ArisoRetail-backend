@@ -63,7 +63,8 @@ class SuperAdminController {
         max_manager_limit: max_manager_limit || 2,
         max_cashier_limit: max_cashier_limit || 3,
         subscription_status: 'active',
-        feature_serial_numbers: req.body.feature_serial_numbers !== undefined ? req.body.feature_serial_numbers : 1
+        feature_serial_numbers: req.body.feature_serial_numbers !== undefined ? req.body.feature_serial_numbers : 1,
+        reconciliation_enabled: req.body.reconciliation_enabled !== undefined ? (req.body.reconciliation_enabled ? 1 : 0) : 0
       });
 
       // 2. Provision Owner User Account in Pending Activation State (unless password is explicitly specified)
@@ -121,7 +122,7 @@ class SuperAdminController {
       name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
       gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
       subscription_status, subscription_start_date, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
-      feature_serial_numbers
+      feature_serial_numbers, reconciliation_enabled
     } = req.body;
     const restaurantId = req.params.id;
 
@@ -138,16 +139,28 @@ class SuperAdminController {
       const existingRest = await SuperAdminRepository.getRestaurantById(restaurantId);
       const prevName = existingRest?.name || null;
       const prevLogo = existingRest?.logo_url || null;
+      const prevRecEnabled = existingRest ? Boolean(existingRest.reconciliation_enabled) : false;
 
       const success = await SuperAdminRepository.updateRestaurant(restaurantId, {
         name, domain, logo_url, address, phone, email, owner_name, owner_email, owner_mobile,
         gst_number, subscription_plan_id, max_user_limit, max_manager_limit, max_cashier_limit,
         subscription_status, subscription_start_date, subscription_expires_at, feature_superbill, barcode_scanner_enabled,
-        feature_serial_numbers
+        feature_serial_numbers, reconciliation_enabled
       });
 
       if (!success) {
         return res.status(404).json({ error: 'Restaurant not found.' });
+      }
+
+      // Write audit log if reconciliation toggle changed
+      if (reconciliation_enabled !== undefined && Boolean(reconciliation_enabled) !== prevRecEnabled) {
+        await SuperAdminRepository.addAuditLog(
+          restaurantId,
+          req.user.id,
+          'TENANT_UPDATE',
+          `Reconciliation ${Boolean(reconciliation_enabled) ? 'enabled' : 'disabled'} for Restaurant ID ${restaurantId}`,
+          req.ip
+        );
       }
 
       if ((name && name !== prevName) || (logo_url !== undefined && logo_url !== prevLogo)) {
@@ -166,7 +179,7 @@ class SuperAdminController {
             new_logo: logo_url !== undefined ? logo_url : prevLogo
           }
         );
-      } else {
+      } else if (reconciliation_enabled === undefined || Boolean(reconciliation_enabled) === prevRecEnabled) {
         await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'TENANT_UPDATE', `Updated settings for Restaurant ID: ${restaurantId}`, req.ip);
       }
 
@@ -271,6 +284,34 @@ class SuperAdminController {
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to toggle Serial Numbers feature permission.' });
+    }
+  }
+
+  static async toggleReconciliation(req, res) {
+    const rawVal = req.body.enabled !== undefined ? req.body.enabled : req.body.reconciliation_enabled;
+    const enabled = Boolean(rawVal);
+    const restaurantId = req.params.id;
+
+    try {
+      const success = await SuperAdminRepository.toggleReconciliationPermission(restaurantId, enabled);
+      if (!success) {
+        return res.status(404).json({ error: 'Restaurant not found.' });
+      }
+
+      await SuperAdminRepository.addAuditLog(
+        restaurantId,
+        req.user.id,
+        'TENANT_UPDATE',
+        `Reconciliation ${enabled ? 'enabled' : 'disabled'} for Restaurant ID ${restaurantId}`,
+        req.ip
+      );
+      return res.json({
+        message: `Payment Reconciliation feature permission ${enabled ? 'enabled' : 'disabled'} for store successfully.`,
+        reconciliation_enabled: enabled ? 1 : 0
+      });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Failed to toggle Payment Reconciliation feature permission.' });
     }
   }
 

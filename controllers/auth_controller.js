@@ -74,7 +74,7 @@ class AuthController {
 
       let restInfo = {};
       const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url, subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled, feature_serial_numbers FROM restaurants WHERE id = ?', [targetRestId]);
+      const [rRows] = await pool.query('SELECT name, logo_url, subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled, feature_serial_numbers, reconciliation_enabled FROM restaurants WHERE id = ?', [targetRestId]);
       if (rRows.length > 0) restInfo = rRows[0];
 
       let whName = null;
@@ -119,6 +119,7 @@ class AuthController {
           feature_superbill: Boolean(restInfo.feature_superbill),
           barcode_scanner_enabled: Boolean(restInfo.barcode_scanner_enabled),
           feature_serial_numbers: isSubExpired ? false : (restInfo.feature_serial_numbers !== undefined ? Boolean(restInfo.feature_serial_numbers) : true),
+          reconciliation_enabled: Boolean(restInfo.reconciliation_enabled),
           shift_id: activeShiftId,
           must_change_password: Boolean(user.must_change_password),
           is_verified: Boolean(user.is_verified),
@@ -185,6 +186,7 @@ class AuthController {
         feature_superbill: restaurant ? Boolean(restaurant.feature_superbill) : false,
         barcode_scanner_enabled: restaurant ? Boolean(restaurant.barcode_scanner_enabled) : false,
         feature_serial_numbers: isSubExpired ? false : (restaurant ? (restaurant.feature_serial_numbers !== undefined ? Boolean(restaurant.feature_serial_numbers) : true) : true),
+        reconciliation_enabled: restaurant ? Boolean(restaurant.reconciliation_enabled) : false,
         assigned_warehouse_id: user.assigned_warehouse_id || null,
         assigned_warehouse_name: user.assigned_warehouse_name || null,
         permissions: Array.isArray(userPerms) ? userPerms : []
@@ -571,7 +573,7 @@ class AuthController {
 
       let restInfo = {};
       const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, feature_serial_numbers FROM restaurants WHERE id = ?', [targetRestId]);
+      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, feature_serial_numbers, reconciliation_enabled FROM restaurants WHERE id = ?', [targetRestId]);
       if (rRows.length > 0) restInfo = rRows[0];
 
       return res.json({
@@ -588,6 +590,7 @@ class AuthController {
           restaurant_logo_url: restInfo.logo_url || null,
           feature_superbill: Boolean(restInfo.feature_superbill),
           feature_serial_numbers: restInfo.feature_serial_numbers !== undefined ? Boolean(restInfo.feature_serial_numbers) : true,
+          reconciliation_enabled: Boolean(restInfo.reconciliation_enabled),
           shift_id: activeShiftId,
           assigned_warehouse_id: user.assigned_warehouse_id || null,
           permissions: (() => {

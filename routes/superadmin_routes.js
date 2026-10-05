@@ -17,6 +17,7 @@ router.put('/restaurants/:id/status', SuperAdminController.toggleStatus);
 router.patch('/restaurants/:id/toggle-superbill', SuperAdminController.toggleSuperBill);
 router.patch('/restaurants/:id/toggle-barcode-scanner', SuperAdminController.toggleBarcodeScanner);
 router.patch('/restaurants/:id/toggle-serial-numbers', SuperAdminController.toggleSerialNumbers);
+router.patch('/restaurants/:id/toggle-reconciliation', SuperAdminController.toggleReconciliation);
 router.get('/plans', SuperAdminController.getSubscriptionPlans);
 router.get('/logs', SuperAdminController.getLogs);
 router.get('/support-contact', SuperAdminController.getSupportContact);
