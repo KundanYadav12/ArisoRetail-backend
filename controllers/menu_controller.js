@@ -1,6 +1,24 @@
 const MenuRepository = require('../repositories/menu_repository');
 const SuperAdminRepository = require('../repositories/superadmin_repository');
 const { notify: rtNotify } = require('../services/realtime_service');
+const ItemStockSync = require('../services/item_stock_sync_service');
+
+// Normalise a POS unit type value from the UI/API into PCS | WEIGHT | SERIAL (or null if absent)
+const resolvePosUnitType = (body) => {
+  const raw = body && (body.pos_unit_type || body.posUnitType);
+  if (raw === undefined || raw === null || raw === '') return null;
+  const s = String(raw).toUpperCase().trim().replace(/[\s_-]+/g, ' ');
+  if (s === 'SERIAL' || s === 'SERIAL NUMBER' || s === 'SERIAL NUMBERS') return 'SERIAL';
+  if (s === 'WEIGHT') return 'WEIGHT';
+  if (s === 'PCS' || s === 'PIECE' || s === 'PIECES') return 'PCS';
+  return null;
+};
+
+const displayItemType = (item, isWeight) => {
+  const t = String(item.pos_unit_type || '').toUpperCase();
+  if (t === 'SERIAL') return 'SERIAL';
+  return isWeight ? 'WEIGHT' : 'PCS';
+};
 
 class MenuController {
   static async getAll(req, res) {
@@ -23,8 +41,8 @@ class MenuController {
         return {
           ...item,
           is_weight_based: isWeight ? 1 : 0,
-          item_type: isWeight ? 'WEIGHT' : 'PCS',
-          itemType: isWeight ? 'WEIGHT' : 'PCS',
+          item_type: displayItemType(item, isWeight),
+          itemType: displayItemType(item, isWeight),
           unit: item.unit || (isWeight ? 'kg' : 'pcs'),
           base_unit: item.base_unit || item.unit || (isWeight ? 'kg' : 'pcs')
         };
@@ -48,8 +66,8 @@ class MenuController {
       return res.json({
         ...item,
         is_weight_based: isWeight ? 1 : 0,
-        item_type: isWeight ? 'WEIGHT' : 'PCS',
-        itemType: isWeight ? 'WEIGHT' : 'PCS',
+        item_type: displayItemType(item, isWeight),
+        itemType: displayItemType(item, isWeight),
         unit: item.unit || (isWeight ? 'kg' : 'pcs'),
         base_unit: item.base_unit || item.unit || (isWeight ? 'kg' : 'pcs')
       });
@@ -93,14 +111,20 @@ class MenuController {
         return defaultVal;
       };
 
-      const isWeight = parseWeightBased(req.body, 0);
+      const posUnitType = resolvePosUnitType(req.body);
+      const isWeight = posUnitType ? (posUnitType === 'WEIGHT' ? 1 : 0) : parseWeightBased(req.body, 0);
       const unitVal = req.body.base_unit || req.body.unit || (isWeight === 1 ? 'kg' : 'pcs');
 
+      const rawCatId = req.body.category_id;
+      const parsedCatId = rawCatId !== null && rawCatId !== undefined && rawCatId !== '' && !isNaN(parseInt(rawCatId)) ? parseInt(rawCatId) : null;
+
       const itemData = {
-        category_id: parseInt(req.body.category_id),
+        category_id: parsedCatId,
         name: req.body.name,
         sku: req.body.sku,
-        barcode: req.body.barcode,
+        barcode: req.body.barcode && String(req.body.barcode).trim() ? String(req.body.barcode).trim() : null,
+        pos_unit_type: posUnitType || (isWeight === 1 ? 'WEIGHT' : 'PCS'),
+        is_serial_tracked: posUnitType === 'SERIAL' ? 1 : 0,
         description: req.body.description,
         price: parseFloat(req.body.price),
         wholesale_price: req.body.wholesale_price !== undefined && req.body.wholesale_price !== '' && req.body.wholesale_price !== null ? parseFloat(req.body.wholesale_price) : null,
@@ -155,7 +179,16 @@ class MenuController {
 
       console.log(`[CREATE MENU ITEM] "${itemData.name}" -> is_weight_based: ${itemData.is_weight_based} (${itemData.is_weight_based === 1 ? 'WEIGHT' : 'PCS'}), unit: "${itemData.unit}"`);
 
+      if (!itemData.barcode) {
+        itemData.barcode = await ItemStockSync.generateUniqueBarcode();
+      }
+
       const itemId = await MenuRepository.create(restaurantId, itemData);
+      await ItemStockSync.syncOpeningStock(restaurantId, itemId, 0, itemData.opening_stock, {
+        costPrice: itemData.cost_price,
+        startDate: itemData.stock_start_date,
+        user: req.user
+      });
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'MENU_CREATE', `Created menu item: ${itemData.name} (ID: ${itemId})`, req.ip);
       rtNotify.menuUpdated(restaurantId, { action: 'create', itemId, name: itemData.name });
 
@@ -206,14 +239,20 @@ class MenuController {
         return defaultVal;
       };
 
-      const isWeight = parseWeightBased(req.body, existingItem.is_weight_based || 0);
+      const posUnitType = resolvePosUnitType(req.body);
+      const isWeight = posUnitType ? (posUnitType === 'WEIGHT' ? 1 : 0) : parseWeightBased(req.body, existingItem.is_weight_based || 0);
       const unitVal = req.body.base_unit || req.body.unit || (isWeight === 1 ? 'kg' : 'pcs');
 
+      const rawCatId = req.body.category_id !== undefined ? req.body.category_id : existingItem.category_id;
+      const parsedCatId = rawCatId !== null && rawCatId !== undefined && rawCatId !== '' && !isNaN(parseInt(rawCatId)) ? parseInt(rawCatId) : null;
+
       const itemData = {
-        category_id: parseInt(req.body.category_id !== undefined ? req.body.category_id : existingItem.category_id),
+        category_id: parsedCatId,
         name: req.body.name || existingItem.name,
         sku: req.body.sku !== undefined ? req.body.sku : existingItem.sku,
         barcode: req.body.barcode !== undefined ? req.body.barcode : existingItem.barcode,
+        pos_unit_type: posUnitType || undefined,
+        is_serial_tracked: posUnitType ? (posUnitType === 'SERIAL' ? 1 : 0) : undefined,
         description: req.body.description !== undefined ? req.body.description : existingItem.description,
         price: parseFloat(req.body.price !== undefined ? req.body.price : existingItem.price),
         wholesale_price: req.body.wholesale_price !== undefined ? (req.body.wholesale_price !== '' && req.body.wholesale_price !== null ? parseFloat(req.body.wholesale_price) : null) : (existingItem.wholesale_price !== undefined ? existingItem.wholesale_price : null),
@@ -264,7 +303,19 @@ class MenuController {
 
       console.log(`[UPDATE MENU ITEM #${itemId}] "${itemData.name}" -> is_weight_based: ${itemData.is_weight_based} (${itemData.is_weight_based === 1 ? 'WEIGHT' : 'PCS'}), unit: "${itemData.unit}"`);
 
+      if (typeof itemData.barcode === 'string') itemData.barcode = itemData.barcode.trim();
+      if (!itemData.barcode) {
+        itemData.barcode = await ItemStockSync.generateUniqueBarcode();
+      }
+
       const success = await MenuRepository.update(itemId, restaurantId, itemData);
+      if (success && req.body.opening_stock !== undefined && req.body.opening_stock !== '') {
+        await ItemStockSync.syncOpeningStock(restaurantId, itemId, existingItem.opening_stock, itemData.opening_stock, {
+          costPrice: itemData.cost_price,
+          startDate: itemData.stock_start_date,
+          user: req.user
+        });
+      }
       if (!success) {
         return res.status(500).json({ error: 'Failed to update menu item.' });
       }

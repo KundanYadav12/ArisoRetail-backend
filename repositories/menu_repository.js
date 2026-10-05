@@ -40,10 +40,13 @@ class MenuRepository {
   }
 
   static async getById(id, restaurantId) {
-    const [rows] = await pool.execute(
-      'SELECT m.*, c.name as category_name FROM menu_items m JOIN categories c ON m.category_id = c.id WHERE m.id = ? AND m.restaurant_id = ?',
-      [id, restaurantId]
-    );
+    let query = 'SELECT m.*, c.name as category_name FROM menu_items m LEFT JOIN categories c ON m.category_id = c.id WHERE m.id = ?';
+    const params = [id];
+    if (restaurantId !== undefined && restaurantId !== null) {
+      query += ' AND m.restaurant_id = ?';
+      params.push(restaurantId);
+    }
+    const [rows] = await pool.execute(query, params);
     return rows[0];
   }
 
@@ -207,9 +210,9 @@ class MenuRepository {
         open_qty_popup = COALESCE(?, open_qty_popup),
         open_price_popup = COALESCE(?, open_price_popup),
         not_for_sale = COALESCE(?, not_for_sale)
-      WHERE id = ? AND restaurant_id = ?`,
+      WHERE id = ? AND (? IS NULL OR restaurant_id = ?)`,
       [
-        category_id,
+        category_id !== undefined ? category_id : null,
         name || '',
         sku || null,
         barcode || null,
@@ -262,6 +265,7 @@ class MenuRepository {
         open_price_popup !== undefined ? (open_price_popup ? 1 : 0) : null,
         not_for_sale !== undefined ? (not_for_sale ? 1 : 0) : null,
         id,
+        restaurantId,
         restaurantId
       ]
     );
@@ -286,8 +290,8 @@ class MenuRepository {
     } catch (e) {}
 
     const [result] = await pool.execute(
-      'DELETE FROM menu_items WHERE id = ? AND restaurant_id = ?',
-      [id, restaurantId]
+      'DELETE FROM menu_items WHERE id = ? AND (? IS NULL OR restaurant_id = ?)',
+      [id, restaurantId, restaurantId]
     );
     return result.affectedRows > 0;
   }

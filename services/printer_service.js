@@ -467,6 +467,7 @@ class PrinterService {
         }
 
         cmds += `${name}\n  ${qtyWtStr.padEnd(18, ' ')} Rs.${total.padStart(8, ' ')}\n`;
+        if (item.serial_number) cmds += `  SN: ${item.serial_number}\n`;
         if (item.notes) cmds += `  * ${item.notes}\n`;
       });
     } else {
@@ -493,6 +494,7 @@ class PrinterService {
         }
 
         cmds += `${name} ${qtyWtStr.padEnd(10, ' ')} ${rateStr.padEnd(10, ' ')} Rs.${total.padStart(8, ' ')}\n`;
+        if (item.serial_number) cmds += `  SN: ${item.serial_number}\n`;
         if (s.show_tax_details !== 0 && item.gst_rate !== undefined && item.gst_rate !== null) {
           const itemGst = parseFloat(item.gst_rate);
           const itemTax = parseFloat(item.tax_amount || 0).toFixed(2);

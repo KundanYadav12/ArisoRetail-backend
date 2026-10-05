@@ -21,7 +21,8 @@ class PdfReceiptService {
         }
         dynamicHeight += 100; // Metadata (Bill #, Cashier, Date, Customer)
         dynamicHeight += 20; // Table Header
-        dynamicHeight += items.length * 28; // Items rows (approx 28pt each)
+        const serialItemsCount = items.filter(it => it.serial_number).length;
+        dynamicHeight += (items.length * 28) + (serialItemsCount * 14); // Items rows + serial lines
         dynamicHeight += 120; // Subtotal, Tax, Discount, Total, Payment details
         if (settings.header_message) dynamicHeight += 30;
         if (settings.thank_you_message || settings.footer_message) dynamicHeight += 50;
@@ -172,6 +173,11 @@ class PdfReceiptService {
              .text(String(qty), { width: usableWidth * 0.15, align: 'right', continued: true })
              .text(rate.toFixed(2), { width: usableWidth * 0.20, align: 'right', continued: true })
              .text(total.toFixed(2), { width: usableWidth * 0.20, align: 'right' });
+          if (item.serial_number) {
+            doc.fontSize(6).font('Helvetica-Bold')
+               .text(`  SN: ${item.serial_number}`, margin, doc.y, { width: usableWidth });
+            doc.fontSize(7).font('Helvetica');
+          }
           doc.moveDown(0.15);
         });
 
