@@ -173,48 +173,33 @@ class SerialNumberController {
         return res.status(404).json({ error: `Serial Number "${serial_number}" not found.` });
       }
 
-      // Fetch store profile for header
+    // Fetch store profile for header
       const [restRows] = await pool.execute(
         'SELECT name FROM restaurants WHERE id = ?',
         [restaurantId]
       );
       const storeName = restRows[0]?.name || 'ARISO RETAIL';
 
-      // Build ESC/POS thermal command stream with Code128 barcode
-      const escposData = SerialNumberService.buildEscposSerialBarcode({
-        serialNumber: serialData.serial_number,
-        productName: serialData.product.name,
-        sku: serialData.product.sku,
-        purchaseInvoice: serialData.purchase.invoice,
-        purchaseDate: serialData.purchase.date,
-        storeName
+      const PrinterService = require('../services/printer_service');
+      const printResult = await PrinterService.printBarcodeLabel(restaurantId, {
+        printer_id: printer_id || null,
+        label_data: {
+          serialNumber: serialData.serial_number,
+          barcode: serialData.serial_number,
+          productName: serialData.product?.name || 'Product',
+          sku: serialData.product?.sku || '',
+          price: serialData.product?.selling_price || serialData.product?.price || null,
+          storeName
+        },
+        copies: 1
       });
-
-      // If printer_id supplied, enqueue print job in print queue
-      let jobId = null;
-      if (printer_id) {
-        const [pRows] = await pool.execute(
-          'SELECT id FROM printers WHERE id = ? AND restaurant_id = ?',
-          [printer_id, restaurantId]
-        );
-        if (pRows.length > 0) {
-          const job = await PrintQueueRepository.enqueue({
-            restaurant_id: restaurantId,
-            printer_id: printer_id,
-            job_type: 'SERIAL_BARCODE',
-            order_id: null,
-            payload: escposData
-          });
-          jobId = job?.id;
-        }
-      }
 
       return res.json({
         success: true,
-        message: `Barcode for Serial #${serialData.serial_number} generated for printing.`,
+        message: printResult.message || `Barcode for Serial #${serialData.serial_number} printed successfully.`,
         serial_number: serialData.serial_number,
-        job_id: jobId,
-        escpos_payload: escposData
+        printer: printResult.printer,
+        protocol: printResult.protocol
       });
     } catch (err) {
       console.error('[SerialNumberController.printBarcode] Error:', err);

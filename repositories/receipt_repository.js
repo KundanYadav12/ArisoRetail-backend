@@ -145,7 +145,8 @@ class ReceiptRepository {
       'gst_mode', 'default_gst_rate', 'print_stage1_mode', 'print_stage2_mode', 'allow_cashier_view_all_reports',
       'enable_whatsapp_receipt', 'whatsapp_business_phone', 'enable_stage2_popup', 'gst_enabled', 'enter_key_qty_popup', 'cart_position',
       'stage1_popup_save_only', 'stage1_popup_receipt_only', 'stage1_popup_kot_only', 'stage1_popup_kot_receipt',
-      'stage2_popup_save_only', 'stage2_popup_receipt_only', 'stage2_popup_kot_only', 'stage2_popup_kot_receipt'
+      'stage2_popup_save_only', 'stage2_popup_receipt_only', 'stage2_popup_kot_only', 'stage2_popup_kot_receipt',
+      'allow_edit_rate_at_billing', 'edit_rate_allowed_roles', 'rate_limit_mode', 'rate_limit_min_discount_pct', 'rate_limit_below_cost'
     ];
 
     const updates = [];

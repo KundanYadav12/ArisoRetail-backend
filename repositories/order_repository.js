@@ -381,12 +381,26 @@ class OrderRepository {
           const barcode = item.barcode || null;
           const serialNumber = item.serial_number || item.serialNumber || null;
 
+          const rawOrigRate = item.original_rate !== undefined && item.original_rate !== null
+            ? item.original_rate
+            : (item.originalRate !== undefined && item.originalRate !== null ? item.originalRate : null);
+          const rawUnitRate = item.unit_rate !== undefined && item.unit_rate !== null
+            ? item.unit_rate
+            : (item.unitRate !== undefined && item.unitRate !== null ? item.unitRate : item.unitPrice);
+
+          const originalRate = rawOrigRate !== null ? parseFloat(rawOrigRate) : parseFloat(item.unitPrice || 0);
+          const unitRate = parseFloat(rawUnitRate !== null ? rawUnitRate : (item.unitPrice || 0));
+          const isRateOverridden = (item.rate_overridden === 1 || item.rate_overridden === true || item.rateOverridden === true)
+            ? 1
+            : (Math.abs(originalRate - unitRate) > 0.001 ? 1 : 0);
+          const itemCashierId = item.cashier_id || item.cashierId || cashier_id || orderData.cashier_id || null;
+
           await connection.execute(
-            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, serial_number, notes, delivered_qty, invoiced_qty, hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount) ' +
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, original_rate, unit_rate, rate_overridden, cashier_id, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, serial_number, notes, delivered_qty, invoiced_qty, hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
               orderId, menuItemId || null, item.name || item.item_name || 'Item', item.name || item.item_name || 'Item',
-              item.unitPrice, item.unitPrice, item.gstRate,
+              item.unitPrice, item.unitPrice, originalRate, unitRate, isRateOverridden, itemCashierId, item.gstRate,
               item.totalTax, item.discountAmount, itemQuantity,
               itemWeight !== undefined ? itemWeight : null, weightUnit || null, baseUnitPrice !== undefined ? baseUnitPrice : null, barcode || null, serialNumber || null, item.notes || null,
               item.hsnCode || null, item.taxableAmount, item.cgstRate, item.cgstAmount, item.sgstRate, item.sgstAmount, item.igstRate, item.igstAmount
@@ -1280,11 +1294,16 @@ class OrderRepository {
             if (checkItem.length === 0) menuItemId = null;
           }
 
+          const originalRate = item.original_rate !== undefined && item.original_rate !== null ? parseFloat(item.original_rate) : itemPrice;
+          const unitRate = item.unit_rate !== undefined && item.unit_rate !== null ? parseFloat(item.unit_rate) : itemPrice;
+          const isRateOverridden = item.rate_overridden !== undefined ? (item.rate_overridden ? 1 : 0) : (Math.abs(originalRate - unitRate) > 0.001 ? 1 : 0);
+          const itemCashierId = item.cashier_id || orderData.cashier_id || null;
+
           await connection.execute(
-            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, notes) ' +
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, original_rate, unit_rate, rate_overridden, cashier_id, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, notes) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
-              id, menuItemId, item.name, item.name, itemPrice, itemPrice, itemGstRate,
+              id, menuItemId, item.name, item.name, itemPrice, itemPrice, originalRate, unitRate, isRateOverridden, itemCashierId, itemGstRate,
               itemTax, item.discount_amount || 0.00, itemQuantity,
               itemWeight, weightUnit, baseUnitPrice, barcode, item.notes || null
             ]
