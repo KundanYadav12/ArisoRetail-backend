@@ -1160,10 +1160,25 @@ class ReportsEngine {
             COALESCE(c.name, 'General') as category_name,
             SUM(oi.quantity) as qty_sold,
             SUM(oi.price * oi.quantity) as gross_sales,
-            SUM(oi.discount_amount) as discount,
+            SUM(
+              COALESCE(oi.discount_amount, 0) + 
+              CASE 
+                WHEN oi.rate_overridden = 1 AND oi.original_rate > oi.price 
+                THEN (oi.original_rate - oi.price) * oi.quantity 
+                ELSE 0 
+              END
+            ) as discount,
             SUM(oi.tax_amount) as gst,
-            SUM((oi.price * oi.quantity) - oi.discount_amount) as net_sales,
-            AVG(oi.price) as avg_price
+            SUM((oi.price * oi.quantity) - COALESCE(oi.discount_amount, 0)) as net_sales,
+            AVG(oi.price) as avg_price,
+            SUM(CASE WHEN oi.rate_overridden = 1 THEN 1 ELSE 0 END) as rate_overridden_count,
+            SUM(
+              CASE 
+                WHEN oi.rate_overridden = 1 AND oi.original_rate > oi.price 
+                THEN (oi.original_rate - oi.price) * oi.quantity 
+                ELSE 0 
+              END
+            ) as rate_discount
           FROM order_items oi
           JOIN orders o ON oi.order_id = o.id
           LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
@@ -1360,6 +1375,75 @@ class ReportsEngine {
         summary = {
           totalCustomers: totalCount,
           totalSales: rawRows.reduce((s, r) => s + parseFloat(r.total_sales || 0), 0)
+        };
+        break;
+      }
+
+      // -------------------------------------------------------------
+      // 8b. SALES DISCOUNTS REPORT
+      // -------------------------------------------------------------
+      case 'sales_discounts': {
+        let whereClause = `
+          WHERE o.restaurant_id = ? 
+            AND o.created_at >= ? 
+            AND o.created_at <= ? 
+            AND o.order_status = 'completed'
+            AND (o.is_sales_order = 0 OR o.is_sales_order IS NULL)
+            AND (o.is_estimate = 0 OR o.is_estimate IS NULL)
+            AND (
+              o.discount_amount > 0 
+              OR EXISTS (
+                SELECT 1 FROM order_items oi 
+                WHERE oi.order_id = o.id 
+                  AND (oi.discount_amount > 0 OR (oi.rate_overridden = 1 AND oi.original_rate > oi.price))
+              )
+            )
+        `;
+        const params = [effectiveRestId, from, to];
+        if (search && search.trim()) {
+          whereClause += ` AND (o.unique_order_number LIKE ? OR o.customer_name LIKE ?)`;
+          params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+        }
+
+        const [discRows] = await pool.execute(`
+          SELECT 
+            o.id,
+            COALESCE(o.unique_order_number, o.id) as invoice_number,
+            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i') as date,
+            COALESCE(o.customer_name, 'Walk-in Customer') as customer_name,
+            COALESCE(o.salesman_name, o.cashier_name, 'Admin') as salesman_name,
+            o.subtotal,
+            (
+              COALESCE(o.discount_amount, 0) + 
+              COALESCE((
+                SELECT SUM(
+                  CASE 
+                    WHEN oi.rate_overridden = 1 AND oi.original_rate > oi.price 
+                    THEN (oi.original_rate - oi.price) * oi.quantity 
+                    ELSE 0 
+                  END
+                ) 
+                FROM order_items oi 
+                WHERE oi.order_id = o.id
+              ), 0)
+            ) as discount_amount,
+            o.total_amount as net_amount
+          FROM orders o
+          ${whereClause}
+          ORDER BY o.created_at DESC
+        `, params);
+
+        totalCount = discRows.length;
+        rows = discRows.slice(offset, offset + parsedLimit).map(r => ({
+          ...r,
+          subtotal: parseFloat(r.subtotal || 0),
+          discount_amount: parseFloat(r.discount_amount || 0),
+          net_amount: parseFloat(r.net_amount || 0)
+        }));
+        summary = {
+          totalBills: totalCount,
+          totalDiscount: discRows.reduce((s, r) => s + parseFloat(r.discount_amount || 0), 0),
+          totalNet: discRows.reduce((s, r) => s + parseFloat(r.net_amount || 0), 0)
         };
         break;
       }

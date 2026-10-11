@@ -170,10 +170,18 @@ class ReportRepository {
         mi.sku,
         SUM(oi.quantity) as qty_sold,
         SUM(oi.price * oi.quantity) as gross_sales,
-        SUM(oi.discount_amount) as discount_given,
+        SUM(
+          COALESCE(oi.discount_amount, 0) + 
+          CASE 
+            WHEN oi.rate_overridden = 1 AND oi.original_rate > oi.price 
+            THEN (oi.original_rate - oi.price) * oi.quantity 
+            ELSE 0 
+          END
+        ) as discount_given,
         SUM(oi.tax_amount) as gst_collected,
         SUM((oi.price * oi.quantity) - oi.discount_amount) as net_sales,
         AVG(oi.price) as avg_selling_price,
+        SUM(CASE WHEN oi.rate_overridden = 1 THEN 1 ELSE 0 END) as rate_override_count,
         MAX(o.created_at) as last_sold_at
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.id
@@ -292,6 +300,9 @@ class ReportRepository {
         o.payment_mode,
         oi.quantity,
         oi.price,
+        oi.original_rate,
+        oi.unit_rate,
+        oi.rate_overridden,
         oi.discount_amount,
         oi.tax_amount,
         (oi.price * oi.quantity) as total_item_amount,

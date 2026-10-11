@@ -25,18 +25,13 @@ class PrinterController {
   }
 
   /**
-   * Scan active local Wi-Fi / subnet for thermal printers listening on port 9100
+   * Scan active local Wi-Fi / subnet and USB ports for thermal printers
    */
   static async discoverPrinters(req, res) {
     try {
       const restaurantId = req.user?.restaurant_id || 1;
       const PrinterService = require('../services/printer_service');
-      const discovered = await PrinterService.discoverNetworkPrinters();
-
-      // Automatically sync discovered printer into DB
-      if (discovered.length > 0) {
-        await PrinterService.autoResolveAndSyncPrinter(restaurantId).catch(() => {});
-      }
+      const discovered = await PrinterService.discoverAllPrinters();
 
       const activePrinters = await PrinterRepository.getAll(restaurantId);
       return res.json({
@@ -46,6 +41,20 @@ class PrinterController {
       });
     } catch (err) {
       console.error('[Discover Printers Error]', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
+   * Return local Windows installed printers dynamically
+   */
+  static async getSystemPrinters(req, res) {
+    try {
+      const PrinterService = require('../services/printer_service');
+      const printers = await PrinterService.getSystemPrinters();
+      return res.json({ success: true, printers });
+    } catch (err) {
+      console.error('[Get System Printers Error]', err);
       return res.status(500).json({ success: false, error: err.message });
     }
   }
@@ -66,17 +75,20 @@ class PrinterController {
 
   static async create(req, res) {
     const { name, type, ip_address, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer } = req.body;
-    if (!name || !ip_address) {
-      return res.status(400).json({ error: 'Printer Name and IP Address are required.' });
+    if (!name) {
+      return res.status(400).json({ error: 'Printer Name is required.' });
+    }
+    if (type !== 'usb' && !ip_address) {
+      return res.status(400).json({ error: 'IP Address is required for network printers.' });
     }
 
     try {
       const restaurantId = req.user?.restaurant_id || 1;
       const printerId = await PrinterRepository.create(restaurantId, {
-        name, type, ip_address, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer
+        name, type: type || (ip_address ? 'lan' : 'usb'), ip_address: ip_address || null, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer
       });
 
-      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'PRINTER_CREATE', `Added printer: ${name} (${ip_address})`, req.ip);
+      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'PRINTER_CREATE', `Added printer: ${name} (${ip_address || 'USB'})`, req.ip);
       return res.status(201).json({ message: 'Printer added successfully.', id: printerId });
     } catch (err) {
       console.error(err);
@@ -86,14 +98,17 @@ class PrinterController {
 
   static async update(req, res) {
     const { name, type, ip_address, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer, is_active, status } = req.body;
-    if (!name || !ip_address) {
-      return res.status(400).json({ error: 'Printer Name and IP Address are required.' });
+    if (!name) {
+      return res.status(400).json({ error: 'Printer Name is required.' });
+    }
+    if (type !== 'usb' && !ip_address) {
+      return res.status(400).json({ error: 'IP Address is required for network printers.' });
     }
 
     try {
       const restaurantId = req.user?.restaurant_id || 1;
       const success = await PrinterRepository.update(req.params.id, restaurantId, {
-        name, type, ip_address, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer, is_active, status
+        name, type: type || (ip_address ? 'lan' : 'usb'), ip_address: ip_address || null, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer, is_active, status
       });
 
       if (!success) {
@@ -148,25 +163,86 @@ class PrinterController {
   }
 
   /**
-   * Test Socket connection & print test receipt on LAN network thermal printer
+   * Test connection & print test receipt/label on LAN or USB thermal printer
    */
   static async testConnection(req, res) {
-    const { id, ip_address, port, paper_width, name } = req.body;
+    const { id, ip_address, port, paper_width, name, type } = req.body;
     const restaurantId = req.user?.restaurant_id || 1;
     const PrinterService = require('../services/printer_service');
 
     let targetIp = ip_address;
     let targetPort = parseInt(port || 9100, 10);
-    let targetName = name || 'LAN Thermal Printer';
+    let targetName = name || '';
     let targetWidth = paper_width || '80';
+    let targetType = type || (targetIp ? 'lan' : 'usb');
 
-    if (!targetIp && id) {
+    if (id) {
       const prn = await PrinterRepository.getById(id, restaurantId);
       if (prn) {
-        targetIp = prn.ip_address;
-        targetPort = parseInt(prn.port || 9100, 10);
-        targetName = prn.name;
-        targetWidth = prn.paper_width || '80';
+        targetIp = targetIp || prn.ip_address;
+        targetPort = parseInt(targetPort || prn.port || 9100, 10);
+        targetName = targetName || prn.name;
+        targetWidth = targetWidth || prn.paper_width || '80';
+        targetType = prn.type || targetType;
+      }
+    }
+
+    // Check if target is a local Windows USB printer
+    const sysPrinters = await PrinterService.getSystemPrinters();
+    const matchedSys = sysPrinters.find(p => p.name.toLowerCase() === (targetName || '').toLowerCase());
+
+    if (matchedSys || targetType === 'usb' || (!targetIp && targetName)) {
+      const printerToTest = matchedSys ? matchedSys.name : targetName;
+      const isLabel = matchedSys ? matchedSys.is_label : /label|barcode|tsc|te244|zebra|zpl/i.test(targetName);
+
+      try {
+        if (isLabel) {
+          const testLabel = PrinterService.buildTsplLabel({
+            storeName: 'ARISO RETAIL',
+            productName: 'TEST BARCODE LABEL',
+            barcode: 'ARISO-TEST-01',
+            price: 99.00,
+            copies: 1
+          });
+          const result = await PrinterService.sendToWindowsSpooler(printerToTest, Buffer.from(testLabel, 'utf8'), 'Ariso Retail Test Label');
+          if (id) {
+            await PrinterRepository.updateStatus(id, restaurantId, 'online').catch(() => {});
+          }
+          return res.json({
+            status: 'connected',
+            success: true,
+            message: `Successfully printed test barcode label to "${printerToTest}"!`,
+            printer: { name: printerToTest, type: 'usb', protocol: 'tspl' },
+            details: result
+          });
+        } else {
+          const cols = (targetWidth === 58 || targetWidth === '58') ? 32 : 48;
+          let testReceipt = '\x1B@\x1Ba\x01\x1BE\x01ARISO RETAIL POS\n\x1BE\x00';
+          testReceipt += '--------------------------------\n';
+          testReceipt += `Printer: ${printerToTest}\nType: USB Spooler\n`;
+          testReceipt += `Date: ${new Date().toLocaleString()}\n`;
+          testReceipt += '*** TEST PRINT SUCCESSFUL ***\n\n\n\n\x1DV\x41\x03';
+          const result = await PrinterService.sendToWindowsSpooler(printerToTest, Buffer.from(testReceipt, 'utf8'), 'Ariso Retail Test Receipt');
+          if (id) {
+            await PrinterRepository.updateStatus(id, restaurantId, 'online').catch(() => {});
+          }
+          return res.json({
+            status: 'connected',
+            success: true,
+            message: `Successfully printed test receipt to "${printerToTest}"!`,
+            printer: { name: printerToTest, type: 'usb', protocol: 'escpos' },
+            details: result
+          });
+        }
+      } catch (err) {
+        if (id) {
+          await PrinterRepository.updateStatus(id, restaurantId, 'offline').catch(() => {});
+        }
+        return res.status(502).json({
+          status: 'failed',
+          success: false,
+          error: `Failed to print to local printer "${printerToTest}": ${err.message}`
+        });
       }
     }
 
@@ -184,7 +260,7 @@ class PrinterController {
     if (!targetIp) {
       return res.status(400).json({
         status: 'failed',
-        error: 'No LAN printer IP address specified and none detected on this local network.'
+        error: 'No printer IP address specified and no supported printer detected on this system or local network.'
       });
     }
 
@@ -234,6 +310,124 @@ class PrinterController {
         success: false,
         error: `Printer socket unreachable at ${targetIp}:${targetPort}. (${err.message})`
       });
+    }
+  }
+
+  /**
+   * Directly print a product barcode/label to connected USB label printer or LAN printer
+   */
+  static async printLabel(req, res) {
+    try {
+      const restaurantId = req.user?.restaurant_id || 1;
+      const { printer_id, printer_name, label_data, copies, product_id, barcode, sku, productName, price, mrp, payload_base64 } = req.body;
+      const PrinterService = require('../services/printer_service');
+
+      console.log('[POST /api/printers/print-label] Received label print request:', {
+        printer_name,
+        printer_id,
+        has_payload_base64: !!payload_base64,
+        copies,
+        product_id,
+        barcode: barcode || label_data?.barcode,
+        sku: sku || label_data?.sku,
+        productName: productName || label_data?.productName || label_data?.name
+      });
+
+      // Direct raw TSPL spooler payload printing (exact ScanGo architecture)
+      if (payload_base64) {
+        const payloadBuffer = Buffer.from(payload_base64, 'base64');
+        const targetPrinterName = printer_name || 'TSC TE244';
+        const spoolResult = await PrinterService.sendToWindowsSpooler(targetPrinterName, payloadBuffer, 'Ariso Barcode Label');
+        console.log('[POST /api/printers/print-label] Sent payload_base64 to spooler:', { targetPrinterName, bytes: payloadBuffer.length, spoolResult });
+        return res.json({
+          success: true,
+          protocol: 'tspl',
+          printer: { name: targetPrinterName, type: 'usb' },
+          message: `Successfully printed barcode stickers on "${targetPrinterName}"!`,
+          details: spoolResult
+        });
+      }
+
+      let resolvedLabelData = { ...(label_data || {}) };
+
+      // Ensure direct body properties are merged into resolvedLabelData
+      if (!resolvedLabelData.productName) {
+        resolvedLabelData.productName = productName || req.body.name || req.body.item_name || '';
+      }
+      if (!resolvedLabelData.barcode) {
+        resolvedLabelData.barcode = barcode || req.body.serial_number || '';
+      }
+      if (!resolvedLabelData.sku) {
+        resolvedLabelData.sku = sku || '';
+      }
+      if (price !== undefined && price !== null && resolvedLabelData.price === undefined) {
+        resolvedLabelData.price = price;
+      }
+      if (mrp !== undefined && mrp !== null && resolvedLabelData.mrp === undefined) {
+        resolvedLabelData.mrp = mrp;
+      }
+
+      // If product_id, barcode or sku provided and productName still missing, query item details
+      if (!resolvedLabelData.productName && (product_id || resolvedLabelData.barcode || resolvedLabelData.sku)) {
+        const pool = require('../config/db');
+        let itemRow = null;
+        if (product_id) {
+          const [rows] = await pool.execute('SELECT * FROM menu_items WHERE id = ?', [product_id]);
+          itemRow = rows[0];
+        } else if (resolvedLabelData.barcode) {
+          const [rows] = await pool.execute('SELECT * FROM menu_items WHERE barcode = ? LIMIT 1', [resolvedLabelData.barcode]);
+          itemRow = rows[0];
+        } else if (resolvedLabelData.sku) {
+          const [rows] = await pool.execute('SELECT * FROM menu_items WHERE sku = ? LIMIT 1', [resolvedLabelData.sku]);
+          itemRow = rows[0];
+        }
+
+        if (itemRow) {
+          resolvedLabelData = {
+            ...resolvedLabelData,
+            productName: resolvedLabelData.productName || itemRow.name,
+            barcode: resolvedLabelData.barcode || itemRow.barcode || itemRow.sku || String(itemRow.id),
+            sku: resolvedLabelData.sku || itemRow.sku || '',
+            price: (resolvedLabelData.price !== undefined && resolvedLabelData.price !== null) ? resolvedLabelData.price : itemRow.price,
+            mrp: (resolvedLabelData.mrp !== undefined && resolvedLabelData.mrp !== null) ? resolvedLabelData.mrp : itemRow.mrp
+          };
+        }
+      }
+
+      // Price fallback if one is missing
+      if ((resolvedLabelData.price === undefined || resolvedLabelData.price === null || Number(resolvedLabelData.price) <= 0) && resolvedLabelData.mrp) {
+        resolvedLabelData.price = resolvedLabelData.mrp;
+      }
+      if ((resolvedLabelData.mrp === undefined || resolvedLabelData.mrp === null || Number(resolvedLabelData.mrp) <= 0) && resolvedLabelData.price) {
+        resolvedLabelData.mrp = resolvedLabelData.price;
+      }
+
+      if (!resolvedLabelData.storeName) {
+        resolvedLabelData.storeName = req.user?.restaurant_name || 'ARISO RETAIL';
+      }
+
+      console.log('[POST /api/printers/print-label] Printing resolved label data:', {
+        printer_name,
+        storeName: resolvedLabelData.storeName,
+        productName: resolvedLabelData.productName,
+        price: resolvedLabelData.price,
+        mrp: resolvedLabelData.mrp,
+        barcode: resolvedLabelData.barcode,
+        rows: resolvedLabelData.rows,
+        copies: copies || 1
+      });
+
+      const result = await PrinterService.printBarcodeLabel(restaurantId, {
+        printer_id: printer_id || null,
+        printer_name: printer_name || null,
+        label_data: resolvedLabelData,
+        copies: copies || 1
+      });
+
+      return res.json(result);
+    } catch (err) {
+      console.error('[Print Label Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
     }
   }
 

@@ -1,5 +1,8 @@
 const net = require('net');
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const { exec } = require('child_process');
 const PrinterRepository = require('../repositories/printer_repository');
 const PrintQueueRepository = require('../repositories/print_queue_repository');
 const OrderRepository = require('../repositories/order_repository');
@@ -7,6 +10,7 @@ const SuperAdminRepository = require('../repositories/superadmin_repository');
 const ReceiptRepository = require('../repositories/receipt_repository');
 const DeviceRepository = require('../repositories/device_repository');
 const Jimp = require('jimp');
+const SerialNumberService = require('./serial_number_service');
 
 // Low-level ESC/POS Commands
 const ESC = '\x1B';
@@ -127,6 +131,90 @@ class PrinterService {
 
     await Promise.all(scanTasks);
     return discovered;
+  }
+
+  /**
+   * Dynamically enumerates all installed local/USB Windows printers
+   * Detects protocol (TSPL, ZPL, ESC/POS), role (label vs receipt), and online status.
+   */
+  static getSystemPrinters() {
+    if (process.platform !== 'win32') return Promise.resolve([]);
+    return new Promise((resolve) => {
+      const psCmd = `Get-Printer | Select-Object Name, DriverName, PortName, PrinterStatus, @{Name='WorkOffline';Expression={[bool]($_.PrinterState -band 0x400 -or $_.WorkOffline)}}, JobCount | ConvertTo-Json -Compress`;
+      exec(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`, { timeout: 4000 }, (error, stdout) => {
+        if (error || !stdout.trim()) {
+          return resolve([]);
+        }
+        try {
+          const raw = JSON.parse(stdout.trim());
+          const list = Array.isArray(raw) ? raw : [raw];
+          const printers = list.map(p => {
+            const name = p.Name || '';
+            const driver = p.DriverName || '';
+            const port = p.PortName || '';
+            const isVirtual = /pdf|onenote|xps|fax|microsoft print to|nul:|portprompt/i.test(`${name} ${driver} ${port}`);
+            const isUsb = /^usb/i.test(port);
+            const isLabel = /tsc|te244|te200|da210|ttp|label|barcode|gprinter|argox|xprinter|hprt|zebra|zpl|godex|datamax/i.test(`${name} ${driver}`);
+            const protocol = isLabel ? (/zebra|zpl/i.test(`${name} ${driver}`) ? 'zpl' : 'tspl') : 'escpos';
+            const isOnline = !p.WorkOffline && (p.PrinterStatus === 0 || p.PrinterStatus === 3 || p.PrinterStatus === 'Normal' || p.PrinterStatus === 'Printing');
+
+            return {
+              name,
+              driver_name: driver,
+              port_name: port,
+              type: isUsb ? 'usb' : (/^\d+\.\d+\.\d+\.\d+/.test(port) ? 'lan' : 'local'),
+              protocol,
+              role: isLabel ? 'label' : 'receipt',
+              is_label: isLabel,
+              is_virtual: isVirtual,
+              is_online: isOnline,
+              status: isOnline ? 'online' : 'offline',
+              job_count: p.JobCount || 0
+            };
+          });
+          resolve(printers);
+        } catch (e) {
+          resolve([]);
+        }
+      });
+    });
+  }
+
+  /**
+   * Unified dynamic discovery combining both local Windows hardware (USB) and subnet LAN socket printers
+   */
+  static async discoverAllPrinters() {
+    const [networkPrinters, systemPrinters] = await Promise.all([
+      this.discoverNetworkPrinters().catch(() => []),
+      this.getSystemPrinters().catch(() => [])
+    ]);
+
+    const physicalSystem = systemPrinters.filter(p => !p.is_virtual);
+    const merged = [];
+    const seenNames = new Set();
+
+    for (const p of physicalSystem) {
+      seenNames.add(p.name.toLowerCase());
+      merged.push({
+        name: p.name,
+        type: p.type || 'usb',
+        port_name: p.port_name,
+        driver_name: p.driver_name,
+        protocol: p.protocol,
+        role: p.role,
+        is_label: p.is_label,
+        status: p.status,
+        paper_width: p.is_label ? '50' : '80'
+      });
+    }
+
+    for (const p of networkPrinters) {
+      if (!seenNames.has(p.name.toLowerCase())) {
+        merged.push(p);
+      }
+    }
+
+    return merged;
   }
 
   /**
@@ -274,6 +362,826 @@ class PrinterService {
         reject(Object.assign(err, { code: 'ETIMEDOUT', tConnectionStarted, tFailed: Date.now() }));
       });
     });
+  }
+
+  /**
+   * Sends raw binary bytes (TSPL, ZPL, or ESC/POS) directly to Windows Spooler for USB or local printers
+   */
+  static sendToWindowsSpooler(printerName, payloadStringOrBuffer, docTitle = 'Ariso Retail Print Job') {
+    if (process.platform !== 'win32') {
+      return Promise.reject(new Error('Windows spooler printing is only supported on Windows OS.'));
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        const buffer = Buffer.isBuffer(payloadStringOrBuffer) ? payloadStringOrBuffer : Buffer.from(payloadStringOrBuffer, 'utf8');
+        const tempPayload = path.join(os.tmpdir(), `ariso_spool_${Date.now()}_${Math.random().toString(36).substring(7)}.bin`);
+        fs.writeFileSync(tempPayload, buffer);
+
+        const b64PayloadPath = Buffer.from(tempPayload, 'utf8').toString('base64');
+        const b64TargetPrinter = Buffer.from(printerName, 'utf8').toString('base64');
+        const safeDocTitle = String(docTitle || 'Ariso Retail Print Job').replace(/"/g, '');
+
+        const psScript = `
+$ErrorActionPreference = 'Stop'
+$typeDef = @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+public class RawPrinterHelper {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public class DOCINFOW {
+        [MarshalAs(UnmanagedType.LPWStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pDataType;
+    }
+    [DllImport("winspool.Drv", EntryPoint = "OpenPrinterW", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter(string szPrinter, out IntPtr hPrinter, IntPtr pd);
+    [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterW", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern Int32 StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOW di);
+    [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+
+    public static string Send(string szPrinterName, string szFileName, string szDocTitle) {
+        if (!File.Exists(szFileName)) return "ERROR: Payload file not found.";
+        byte[] bytes = File.ReadAllBytes(szFileName);
+        IntPtr hPrinter = new IntPtr(0);
+        DOCINFOW di = new DOCINFOW();
+        di.pDocName = string.IsNullOrEmpty(szDocTitle) ? "Ariso Print Job" : szDocTitle;
+        di.pDataType = "RAW";
+        if (!OpenPrinter(szPrinterName, out hPrinter, IntPtr.Zero)) {
+            int err = Marshal.GetLastWin32Error();
+            string msg = "ERROR: Unable to open printer '" + szPrinterName + "'. ";
+            if (err == 5) msg += "Access Denied (Win32 Code 5).";
+            else if (err == 1801) msg += "Printer name is invalid or disconnected (Win32 Code 1801).";
+            else msg += "Win32 Error Code: " + err + ".";
+            return msg;
+        }
+        try {
+            int jobId = StartDocPrinter(hPrinter, 1, di);
+            if (jobId <= 0) {
+                int err = Marshal.GetLastWin32Error();
+                return "ERROR: StartDocPrinter failed for '" + szPrinterName + "' (Win32 Code: " + err + "). Printer may be offline or busy.";
+            }
+            try {
+                if (StartPagePrinter(hPrinter)) {
+                    IntPtr pUnmanagedBytes = Marshal.AllocCoTaskMem(bytes.Length);
+                    Marshal.Copy(bytes, 0, pUnmanagedBytes, bytes.Length);
+                    int dwWritten = 0;
+                    bool bSuccess = WritePrinter(hPrinter, pUnmanagedBytes, bytes.Length, out dwWritten);
+                    Marshal.FreeCoTaskMem(pUnmanagedBytes);
+                    EndPagePrinter(hPrinter);
+                    if (!bSuccess || dwWritten != bytes.Length) {
+                        return "ERROR: WritePrinter failed for '" + szPrinterName + "'. Written " + dwWritten + " of " + bytes.Length + " bytes.";
+                    }
+                    return "SUCCESS: " + szPrinterName;
+                }
+            } finally {
+                EndDocPrinter(hPrinter);
+            }
+        } finally {
+            ClosePrinter(hPrinter);
+        }
+        return "ERROR: Spooler transaction failed.";
+    }
+}
+'@
+Add-Type -TypeDefinition $typeDef
+$payloadFilePath = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("${b64PayloadPath}"))
+$targetPrinterName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("${b64TargetPrinter}"))
+$res = [RawPrinterHelper]::Send($targetPrinterName, $payloadFilePath, "${safeDocTitle}")
+Write-Output $res
+`;
+
+        const psScriptFile = path.join(os.tmpdir(), `ariso_spool_${Date.now()}_${Math.random().toString(36).substring(7)}.ps1`);
+        fs.writeFileSync(psScriptFile, psScript, 'utf8');
+
+        exec(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${psScriptFile}"`, { timeout: 6000 }, (error, stdout, stderr) => {
+          try { fs.unlinkSync(tempPayload); } catch (e) {}
+          try { fs.unlinkSync(psScriptFile); } catch (e) {}
+
+          const outStr = (stdout || '').trim();
+          const errStr = (stderr || '').trim();
+
+          if (outStr.startsWith('SUCCESS:')) {
+            resolve({ success: true, method: 'winspool_raw', printer: printerName, message: outStr });
+          } else if (outStr.startsWith('ERROR:')) {
+            reject(new Error(outStr.replace(/^ERROR:\s*/, '')));
+          } else if (error || errStr) {
+            const cleanMsg = errStr.replace(/^.*?:\s*/, '') || error?.message || 'Print dispatch failed.';
+            reject(new Error(cleanMsg));
+          } else {
+            reject(new Error(outStr || 'Unknown print spooler status'));
+          }
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  /**
+   * Generates native TSPL commands for label stickers (TSC, Gprinter, HPRT, Xprinter, etc.)
+   * Fully responsive across 50x25mm, 38x38mm, 38x50mm in both 1-Row and 2-Row (twin side-by-side) roll formats.
+   * All fields are centered within die-cut boundaries with zero rotation (upright).
+   */
+  /**
+   * Generates native TSPL commands for label stickers (TSC, Gprinter, HPRT, Xprinter, etc.)
+   * Ported from ScanGo's proven TSPL architecture.
+   * Fully responsive across 50x25mm, 38x38mm, 38x50mm in both 1-Row and 2-Row (twin side-by-side) roll formats.
+   * All fields are centered within die-cut boundaries with DIRECTION 1 (upright, zero rotation).
+   */
+  static buildTsplLabel({
+    storeName = 'ARISO RETAIL',
+    productName = '',
+    name = '',
+    item_name = '',
+    barcode = '',
+    sku = '',
+    serialNumber = '',
+    price = null,
+    mrp = null,
+    widthMm = 38,
+    heightMm = 50,
+    rows = 2,
+    gapMm = 3,
+    spacingMm = 3,
+    dpi = 203,
+    copies = 1,
+    showShopName = true,
+    showProductName = true,
+    localProductName = '',
+    showAddress = false,
+    address = '',
+    showWeight = false,
+    printWeight = false,
+    weight = '',
+    weightValue = '',
+    weightUnit = 'g',
+    showSize = false,
+    size = '',
+    showColor = false,
+    color = '',
+    showMrp = true,
+    showSellingPrice = true,
+    showMfgDate = true,
+    mfgDate = '',
+    showExpDate = false,
+    expDate = '',
+    showBarcode = true,
+    direction = 0,
+    offsetXmm = 0,
+    offsetYmm = 0,
+    speed = 4,
+    density = 8
+  }) {
+    const sanitizeAscii = (str) => {
+      if (!str) return '';
+      return String(str)
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/[\u2022\u2023\u25E6\u2043\u2219]/g, '-')
+        .replace(/₹/g, 'Rs.')
+        .replace(/[^\x20-\x7E]/g, '')
+        .trim();
+    };
+
+    const w = parseInt(widthMm, 10) || 38;
+    const h = parseInt(heightMm, 10) || 50;
+    const is2Row = parseInt(rows, 10) === 2;
+    const g = parseFloat(gapMm || spacingMm) || 3;
+    const totalCopies = Math.max(1, parseInt(copies, 10) || 1);
+    const tsplDir = direction !== undefined ? parseInt(direction, 10) : 0;
+    const prnDpi = parseInt(dpi, 10) === 300 ? 300 : 203;
+    const dpmm = prnDpi === 300 ? (300 / 25.4) : 8;
+
+    const rollWidthMm = is2Row ? (w * 2 + g) : w;
+    const cellWidthDots = Math.round(w * dpmm);
+    const cellHeightDots = Math.round(h * dpmm);
+    const gapDots = Math.round(g * dpmm);
+
+    // Safe inner margin: 2mm (16 dots at 203 DPI, 24 dots at 300 DPI)
+    const marginDots = Math.max(Math.round(2 * dpmm), 16);
+    const usableDots = cellWidthDots - (marginDots * 2);
+    const usableHeightDots = cellHeightDots - (marginDots * 2);
+
+    const offXDots = Math.round((parseFloat(offsetXmm) || 0) * dpmm);
+    const offYDots = Math.round((parseFloat(offsetYmm) || 0) * dpmm);
+
+    // Column X cell origins
+    const cell1X = offXDots;
+    const cell2X = offXDots + cellWidthDots + gapDots;
+
+    const headerLines = [
+      `SIZE ${rollWidthMm} mm, ${h} mm`,
+      `GAP ${g} mm, 0 mm`,
+      `SPEED ${speed || 4}`,
+      `DENSITY ${density || 8}`,
+      `DIRECTION ${tsplDir}`,
+      `REFERENCE 0,0`,
+      `OFFSET 0 mm`,
+      `SET PEEL OFF`,
+      `SET CUTTER OFF`,
+      `SET TEAR ON`,
+      `SET PAUSE OFF`
+    ];
+
+    const fonts = prnDpi === 300 ? {
+      small: { id: '1', charW: 10, charH: 14, lineH: 18 },
+      regular: { id: '2', charW: 16, charH: 22, lineH: 26 },
+      large: { id: '3', charW: 24, charH: 30, lineH: 34 }
+    } : {
+      small: { id: '1', charW: 8, charH: 12, lineH: 16 },
+      regular: { id: '2', charW: 12, charH: 20, lineH: 24 },
+      large: { id: '3', charW: 16, charH: 24, lineH: 28 }
+    };
+
+    const cleanStore = sanitizeAscii(storeName || 'ARISO RETAIL');
+    const cleanName = sanitizeAscii(localProductName || productName || name || item_name || '');
+    const cleanAddress = sanitizeAscii(address || '');
+    const cleanCode = sanitizeAscii(barcode || serialNumber || sku || '00000000');
+
+    // Variant summary
+    const variantParts = [];
+    if (showWeight && weight) variantParts.push(/^net\s*wt:\s*/i.test(weight) ? sanitizeAscii(weight) : `Net Wt: ${sanitizeAscii(weight)}`);
+    if (showSize && size) variantParts.push(/^size:\s*/i.test(size) ? sanitizeAscii(size) : `Size: ${sanitizeAscii(size)}`);
+    if (showColor && color) variantParts.push(/^color:\s*/i.test(color) ? sanitizeAscii(color) : `Color: ${sanitizeAscii(color)}`);
+    const variantLine = variantParts.join(' - ');
+
+    // Date summary
+    const dateParts = [];
+    if (showMfgDate && mfgDate) dateParts.push(`Mfg: ${sanitizeAscii(mfgDate)}`);
+    if (showExpDate && expDate) dateParts.push(`Exp: ${sanitizeAscii(expDate)}`);
+    const dateLine = dateParts.join('  ');
+
+    // Price summary with mutual fallback
+    let numPrice = price !== null && price !== undefined && !isNaN(Number(price)) ? Number(price) : null;
+    let numMrp = mrp !== null && mrp !== undefined && !isNaN(Number(mrp)) ? Number(mrp) : null;
+    if ((numPrice === null || numPrice <= 0) && numMrp !== null && numMrp > 0) {
+      numPrice = numMrp;
+    }
+    if ((numMrp === null || numMrp <= 0) && numPrice !== null && numPrice > 0) {
+      numMrp = numPrice;
+    }
+    const hasMrp = showMrp && numMrp !== null && numMrp > 0;
+    const hasPrice = showSellingPrice && numPrice !== null && numPrice > 0;
+
+    // Helper to auto-fit text into 1 or 2 lines centered within usableDots
+    const fitText = (text, prefFontKey, maxLines = 2) => {
+      if (!text) return null;
+      const prefFont = fonts[prefFontKey] || fonts.regular;
+      const smFont = fonts.small;
+
+      if (text.length * prefFont.charW <= usableDots) {
+        return { font: prefFont, lines: [text] };
+      }
+
+      if (prefFontKey !== 'small' && text.length * smFont.charW <= usableDots && maxLines === 1) {
+        return { font: smFont, lines: [text] };
+      }
+
+      const wrapWords = (f, maxL) => {
+        const words = text.split(/\s+/);
+        const lines = [];
+        let curLine = '';
+        for (const word of words) {
+          const testLine = curLine ? curLine + ' ' + word : word;
+          if (testLine.length * f.charW <= usableDots) {
+            curLine = testLine;
+          } else {
+            if (curLine) lines.push(curLine);
+            curLine = word;
+            if (lines.length === maxL - 1) break;
+          }
+        }
+        if (curLine && lines.length < maxL) {
+          let lastLine = curLine;
+          if (lastLine.length * f.charW > usableDots) {
+            const maxChars = Math.floor(usableDots / f.charW);
+            lastLine = lastLine.slice(0, Math.max(1, maxChars - 3)).trim() + '...';
+          }
+          lines.push(lastLine);
+        }
+        return lines;
+      };
+
+      if (maxLines >= 2) {
+        const prefLines = wrapWords(prefFont, 2);
+        const joined = prefLines.join(' ');
+        if (joined.length >= text.length - 3) {
+          return { font: prefFont, lines: prefLines };
+        }
+        const smLines = wrapWords(smFont, 2);
+        return { font: smFont, lines: smLines };
+      }
+
+      const maxChars = Math.floor(usableDots / prefFont.charW);
+      const trunc = text.slice(0, Math.max(1, maxChars - 3)).trim() + '...';
+      return { font: prefFont, lines: [trunc] };
+    };
+
+    // Code128 barcode math: guarantee full fit in usableDots with quiet zones
+    const dataChars = cleanCode.length;
+    const modules = 11 * (dataChars + 2) + 13;
+    let narrow = 1;
+    const minQuietZone = Math.round(2 * dpmm);
+    if ((modules * 3) + (2 * minQuietZone) <= usableDots) {
+      narrow = 3;
+    } else if ((modules * 2) + (2 * minQuietZone) <= usableDots) {
+      narrow = 2;
+    } else {
+      narrow = 1;
+    }
+    const barcodeW = modules * narrow;
+
+    const buildSingleLabelCommands = (cellOriginX) => {
+      const cmds = [];
+      const elements = [];
+
+      // 1. Shop Name
+      if (showShopName && cleanStore) {
+        const fitted = fitText(cleanStore, h < 30 ? 'small' : 'regular', 1);
+        if (fitted) {
+          elements.push({
+            type: 'text',
+            font: fitted.font,
+            lines: fitted.lines,
+            isBold: true,
+            height: fitted.lines.length * fitted.font.lineH
+          });
+        }
+      }
+
+      // 2. Shop Address (if enabled and label is tall)
+      if (showAddress && cleanAddress && h >= 45) {
+        const fitted = fitText(cleanAddress, 'small', 1);
+        if (fitted) {
+          elements.push({
+            type: 'text',
+            font: fitted.font,
+            lines: fitted.lines,
+            isBold: false,
+            height: fitted.lines.length * fitted.font.lineH
+          });
+        }
+      }
+
+      // 3. Product Name (1 line for <=25mm, up to 2 lines for >=38mm)
+      if (showProductName && cleanName) {
+        const fitted = fitText(cleanName, h < 30 ? 'small' : 'regular', h < 30 ? 1 : 2);
+        if (fitted) {
+          elements.push({
+            type: 'text',
+            font: fitted.font,
+            lines: fitted.lines,
+            isBold: true,
+            height: fitted.lines.length * fitted.font.lineH
+          });
+        }
+      }
+
+      // 3b. Weight Option (dedicated line between product name and MRP)
+      if (printWeight && weightValue) {
+        const wStr = `Wt: ${weightValue} ${weightUnit || 'g'}`;
+        const fittedWeight = fitText(wStr, 'small', 1);
+        if (fittedWeight) {
+          elements.push({
+            type: 'text',
+            font: fittedWeight.font,
+            lines: fittedWeight.lines,
+            isBold: true,
+            height: fittedWeight.lines.length * fittedWeight.font.lineH
+          });
+        }
+      }
+
+      // 4. Variant Info
+      if (variantLine && h >= 45 && !printWeight) {
+        const fitted = fitText(variantLine, 'small', 1);
+        if (fitted) {
+          elements.push({
+            type: 'text',
+            font: fitted.font,
+            lines: fitted.lines,
+            isBold: false,
+            height: fitted.lines.length * fitted.font.lineH
+          });
+        }
+      }
+
+      // 5. MRP & Price
+      if (h >= 35) {
+        if (hasMrp && hasPrice && numMrp > numPrice) {
+          elements.push({
+            type: 'mrp',
+            font: fonts.small,
+            text: `MRP: Rs.${numMrp.toFixed(2)}`,
+            height: fonts.small.lineH
+          });
+          elements.push({
+            type: 'text',
+            font: fonts.regular,
+            lines: [`Our Price: Rs.${numPrice.toFixed(2)}`],
+            isBold: true,
+            height: fonts.regular.lineH
+          });
+        } else if (hasPrice) {
+          elements.push({
+            type: 'text',
+            font: fonts.regular,
+            lines: [`Price: Rs.${numPrice.toFixed(2)}`],
+            isBold: true,
+            height: fonts.regular.lineH
+          });
+        } else if (hasMrp) {
+          elements.push({
+            type: 'text',
+            font: fonts.regular,
+            lines: [`MRP: Rs.${numMrp.toFixed(2)}`],
+            isBold: true,
+            height: fonts.regular.lineH
+          });
+        }
+
+        // 6. Mfg / Exp Date
+        if (dateLine) {
+          elements.push({
+            type: 'text',
+            font: fonts.small,
+            lines: [dateLine],
+            isBold: false,
+            height: fonts.small.lineH
+          });
+        }
+      } else {
+        // Compact (50x25 mm): Combined Price and Mfg line
+        let compactLine = '';
+        if (hasPrice) compactLine += `Price: Rs.${numPrice.toFixed(0)}`;
+        else if (hasMrp) compactLine += `MRP: Rs.${numMrp.toFixed(0)}`;
+        if (showMfgDate && mfgDate) compactLine += (compactLine ? '  ' : '') + `Mfg: ${sanitizeAscii(mfgDate)}`;
+        if (compactLine) {
+          elements.push({
+            type: 'text',
+            font: fonts.small,
+            lines: [compactLine],
+            isBold: true,
+            height: fonts.small.lineH
+          });
+        }
+      }
+
+      // 7. Code128 Barcode & Centered Human-Readable Text
+      if (showBarcode && cleanCode) {
+        let barH = Math.round(4.5 * dpmm);
+        if (h >= 45) barH = Math.round(9 * dpmm);
+        else if (h >= 35) barH = Math.round(6.5 * dpmm);
+        else barH = Math.round(3.5 * dpmm);
+
+        const textFit = fitText(cleanCode, h < 30 ? 'small' : 'regular', 1) || { font: fonts.small, lines: [cleanCode] };
+        elements.push({
+          type: 'barcode',
+          barcodeValue: cleanCode,
+          barcodeW,
+          barH,
+          narrow,
+          wide: narrow * 2,
+          font: textFit.font,
+          textLine: cleanCode,
+          height: barH + Math.round(1 * dpmm) + textFit.font.lineH
+        });
+      }
+
+      // Height compression if total exceeds usableHeightDots
+      let totalElH = elements.reduce((sum, el) => sum + el.height, 0);
+      if (totalElH > usableHeightDots) {
+        elements.forEach(el => {
+          if (el.type === 'barcode') {
+            el.barH = Math.max(Math.round(3 * dpmm), el.barH - (totalElH - usableHeightDots));
+            el.height = el.barH + Math.round(1 * dpmm) + el.font.lineH;
+          }
+        });
+        totalElH = elements.reduce((sum, el) => sum + el.height, 0);
+      }
+
+      const remainingH = usableHeightDots - totalElH;
+      const spacing = Math.max(1, Math.floor(remainingH / (elements.length + 1)));
+
+      let curY = Math.max(0, offYDots + marginDots + spacing);
+
+      elements.forEach((el) => {
+        if (el.type === 'text') {
+          el.lines.forEach((line) => {
+            const textW = line.length * el.font.charW;
+            const textX = Math.max(0, cellOriginX + marginDots + Math.max(0, Math.round((usableDots - textW) / 2)));
+            cmds.push(`TEXT ${textX},${curY},"${el.font.id}",0,1,1,"${line}"`);
+            if (el.isBold) {
+              cmds.push(`TEXT ${textX + 1},${curY},"${el.font.id}",0,1,1,"${line}"`);
+            }
+            curY += el.font.lineH;
+          });
+          curY += spacing;
+        } else if (el.type === 'mrp') {
+          const textW = el.text.length * el.font.charW;
+          const textX = Math.max(0, cellOriginX + marginDots + Math.max(0, Math.round((usableDots - textW) / 2)));
+          cmds.push(`TEXT ${textX},${curY},"${el.font.id}",0,1,1,"${el.text}"`);
+          const barY = curY + Math.round(el.font.charH / 2);
+          const barThick = prnDpi === 300 ? 3 : 2;
+          cmds.push(`BAR ${textX},${barY},${textW},${barThick}`);
+          curY += el.font.lineH + spacing;
+        } else if (el.type === 'barcode') {
+          const barX = Math.max(0, cellOriginX + marginDots + Math.max(0, Math.round((usableDots - el.barcodeW) / 2)));
+          cmds.push(`BARCODE ${barX},${curY},"128",${el.barH},0,0,${el.narrow},${el.wide},"${el.barcodeValue}"`);
+          curY += el.barH + Math.round(1 * dpmm);
+
+          const textW = el.textLine.length * el.font.charW;
+          const textX = Math.max(0, cellOriginX + marginDots + Math.max(0, Math.round((usableDots - textW) / 2)));
+          cmds.push(`TEXT ${textX},${curY},"${el.font.id}",0,1,1,"${el.textLine}"`);
+          curY += el.font.lineH + spacing;
+        }
+      });
+
+      return cmds;
+    };
+
+    // Body streaming: Header sent once, CLS ... PRINT 1,1 for each physical row
+    const allLines = [...headerLines];
+
+    if (is2Row) {
+      const physicalRows = Math.ceil(totalCopies / 2);
+      for (let r = 0; r < physicalRows; r++) {
+        allLines.push('CLS');
+        allLines.push(...buildSingleLabelCommands(cell1X));
+        if ((r * 2 + 1) < totalCopies) {
+          allLines.push(...buildSingleLabelCommands(cell2X));
+        }
+        allLines.push('PRINT 1,1');
+      }
+    } else {
+      for (let r = 0; r < totalCopies; r++) {
+        allLines.push('CLS');
+        allLines.push(...buildSingleLabelCommands(cell1X));
+        allLines.push('PRINT 1,1');
+      }
+    }
+
+    return allLines.join('\r\n') + '\r\n';
+  }
+
+  /**
+   * Generates native TSPL calibration payload for diagnostic border and margin verification
+   */
+  static buildCalibrationTsplLabel({
+    widthMm = 38,
+    heightMm = 50,
+    rows = 2,
+    gapMm = 3,
+    spacingMm = 3,
+    dpi = 203,
+    direction = 0,
+    offsetXmm = 0,
+    offsetYmm = 0
+  }) {
+    const w = parseInt(widthMm, 10) || 38;
+    const h = parseInt(heightMm, 10) || 50;
+    const is2Row = parseInt(rows, 10) === 2;
+    const g = parseFloat(gapMm || spacingMm) || 3;
+    const prnDpi = parseInt(dpi, 10) === 300 ? 300 : 203;
+    const dpmm = prnDpi === 300 ? (300 / 25.4) : 8;
+
+    const rollWidthMm = is2Row ? (w * 2 + g) : w;
+    const cellWidthDots = Math.round(w * dpmm);
+    const cellHeightDots = Math.round(h * dpmm);
+    const gapDots = Math.round(g * dpmm);
+
+    const marginDots = Math.max(Math.round(2 * dpmm), 16);
+    const usableDots = cellWidthDots - (marginDots * 2);
+    const usableHeightDots = cellHeightDots - (marginDots * 2);
+
+    const tsplDir = direction !== undefined ? parseInt(direction, 10) : 0;
+    const offXDots = Math.round((parseFloat(offsetXmm) || 0) * dpmm);
+    const offYDots = Math.round((parseFloat(offsetYmm) || 0) * dpmm);
+
+    const cell1X = offXDots;
+    const cell2X = offXDots + cellWidthDots + gapDots;
+
+    const headerLines = [
+      `SIZE ${rollWidthMm} mm, ${h} mm`,
+      `GAP ${g} mm, 0 mm`,
+      `SPEED 4`,
+      `DENSITY 8`,
+      `DIRECTION ${tsplDir}`,
+      `REFERENCE 0,0`,
+      `OFFSET 0 mm`,
+      `SET PEEL OFF`,
+      `SET CUTTER OFF`,
+      `SET TEAR ON`,
+      `SET PAUSE OFF`,
+      `GAPDETECT`
+    ];
+
+    const font = prnDpi === 300 ? {
+      small: { id: '1', charW: 10, charH: 14, lineH: 18 },
+      regular: { id: '2', charW: 16, charH: 22, lineH: 26 }
+    } : {
+      small: { id: '1', charW: 8, charH: 12, lineH: 16 },
+      regular: { id: '2', charW: 12, charH: 20, lineH: 24 }
+    };
+
+    const centerTextX = (str, charWidth, cellOriginX) => {
+      const textLen = (str || '').length;
+      const textWidth = textLen * charWidth;
+      return Math.max(0, cellOriginX + marginDots + Math.max(0, Math.round((usableDots - textWidth) / 2)));
+    };
+
+    const buildCellCalibration = (labelTag, cellOriginX) => {
+      const cmds = [];
+      const x0 = Math.max(0, cellOriginX);
+      const x1 = Math.max(0, cellOriginX + cellWidthDots - 1);
+      const y0 = Math.max(0, offYDots);
+      const y1 = Math.max(0, offYDots + cellHeightDots - 1);
+
+      cmds.push(`BOX ${x0},${y0},${x1},${y1},2`);
+
+      const mX0 = Math.max(0, cellOriginX + marginDots);
+      const mX1 = Math.max(0, cellOriginX + cellWidthDots - marginDots);
+      const mY0 = Math.max(0, offYDots + marginDots);
+      const mY1 = Math.max(0, offYDots + cellHeightDots - marginDots);
+      cmds.push(`BOX ${mX0},${mY0},${mX1},${mY1},1`);
+
+      let curY = mY0 + Math.round(2 * dpmm);
+      const topStr = '▲▲ TOP OF LABEL ▲▲';
+      cmds.push(`TEXT ${centerTextX(topStr, font.small.charW, cellOriginX)},${curY},"${font.small.id}",0,1,1,"${topStr}"`);
+      curY += font.small.lineH + 4;
+
+      const tagStr = `[ ${labelTag} ]`;
+      cmds.push(`TEXT ${centerTextX(tagStr, font.regular.charW, cellOriginX)},${curY},"${font.regular.id}",0,1,1,"${tagStr}"`);
+      curY += font.regular.lineH;
+
+      const szStr = `${w}x${h} mm | ${prnDpi} DPI | X:${offsetXmm || 0} Y:${offsetYmm || 0}mm`;
+      cmds.push(`TEXT ${centerTextX(szStr, font.small.charW, cellOriginX)},${curY},"${font.small.id}",0,1,1,"${szStr}"`);
+      curY += font.small.lineH;
+
+      const guide1 = 'Outer Box: Die-Cut Edge';
+      const guide2 = 'Inner Box: 2mm Safe Area';
+      cmds.push(`TEXT ${centerTextX(guide1, font.small.charW, cellOriginX)},${curY},"${font.small.id}",0,1,1,"${guide1}"`);
+      curY += font.small.lineH;
+      cmds.push(`TEXT ${centerTextX(guide2, font.small.charW, cellOriginX)},${curY},"${font.small.id}",0,1,1,"${guide2}"`);
+
+      const midX = cellOriginX + Math.round(cellWidthDots / 2);
+      const midY = offYDots + Math.round(cellHeightDots / 2);
+      cmds.push(`BAR ${mX0},${midY},${usableDots},1`);
+      cmds.push(`BAR ${midX},${mY0},1,${usableHeightDots}`);
+
+      const btmStr = '▼▼ FEED DIRECTION ▼▼';
+      const btmY = mY1 - font.small.charH - 2;
+      cmds.push(`TEXT ${centerTextX(btmStr, font.small.charW, cellOriginX)},${btmY},"${font.small.id}",0,1,1,"${btmStr}"`);
+
+      return cmds;
+    };
+
+    const allLines = [...headerLines];
+    allLines.push('CLS');
+    allLines.push(...buildCellCalibration(is2Row ? 'LEFT LABEL' : 'LABEL 1', cell1X));
+    if (is2Row) {
+      allLines.push(...buildCellCalibration('RIGHT LABEL', cell2X));
+    }
+    allLines.push('PRINT 1,1');
+
+    return allLines.join('\r\n') + '\r\n';
+  }
+
+  /**
+   * Generates native ZPL commands for Zebra label printers
+   */
+  static buildZplLabel({
+    storeName = 'ARISO RETAIL',
+    productName = 'Product Label',
+    barcode = '',
+    price = null,
+    copies = 1
+  }) {
+    const cleanStore = String(storeName || 'ARISO RETAIL').replace(/[\^~]/g, '');
+    const cleanName = String(productName || 'Product').replace(/[\^~]/g, '').slice(0, 30);
+    const cleanCode = String(barcode || '00000000').trim().replace(/[\^~]/g, '');
+    const c = Math.max(1, parseInt(copies, 10) || 1);
+
+    let priceText = '';
+    if (price) priceText = `Rs. ${parseFloat(price).toFixed(2)}`;
+
+    let zpl = `^XA\n^PW400\n^LL200\n`;
+    zpl += `^FO20,15^A0N,20,20^FD${cleanStore}^FS\n`;
+    zpl += `^FO20,40^A0N,22,22^FD${cleanName}^FS\n`;
+    if (priceText) {
+      zpl += `^FO20,65^A0N,20,20^FD${priceText}^FS\n`;
+    }
+    zpl += `^FO20,95^BY2,2,45^BCN,45,Y,N,N^FD${cleanCode}^FS\n`;
+    zpl += `^PQ${c}\n^XZ\n`;
+    return zpl;
+  }
+
+  /**
+   * Universal Barcode/Label Printer Engine: Dynamically detects connected printer protocol,
+   * creates correct payload (TSPL/ZPL/ESCPOS), and dispatches via Windows spooler or LAN socket.
+   */
+  static async printBarcodeLabel(restaurantId, { printer_id, printer_name, label_data = {}, copies = 1 }) {
+    let targetPrinter = null;
+
+    if (printer_id) {
+      targetPrinter = await PrinterRepository.getById(printer_id, restaurantId);
+    }
+
+    if (!targetPrinter && printer_name) {
+      const sysPrinters = await this.getSystemPrinters();
+      targetPrinter = sysPrinters.find(p => p.name.toLowerCase() === printer_name.toLowerCase()) || null;
+    }
+
+    if (!targetPrinter) {
+      const allDb = await PrinterRepository.getAll(restaurantId);
+      targetPrinter = allDb.find(p => p.role === 'label' || p.role === 'barcode') || null;
+    }
+
+    if (!targetPrinter) {
+      const sysPrinters = await this.getSystemPrinters();
+      targetPrinter = sysPrinters.find(p => !p.is_virtual && p.is_label) || sysPrinters.find(p => !p.is_virtual && p.type === 'usb') || null;
+    }
+
+    if (!targetPrinter) {
+      throw new Error('No physical barcode/label printer detected. Please connect your USB barcode printer.');
+    }
+
+    const sysPrinters = await this.getSystemPrinters();
+    const matchingSys = sysPrinters.find(p => p.name.toLowerCase() === (targetPrinter.name || '').toLowerCase());
+    if (matchingSys) {
+      targetPrinter = { ...matchingSys, ...targetPrinter, driver_name: matchingSys.driver_name, port_name: matchingSys.port_name };
+    }
+
+    const pName = (targetPrinter.name || '').toLowerCase();
+    const dName = (targetPrinter.driver_name || '').toLowerCase();
+    const isZebra = /zebra|zpl/i.test(`${pName} ${dName}`);
+    const isTsc = /tsc|te244|te200|da210|ttp|gprinter|hprt|xprinter|godex|argox|label|barcode/i.test(`${pName} ${dName}`) || targetPrinter.protocol === 'tspl' || (matchingSys && matchingSys.is_label);
+
+    const mergedCopies = Math.max(1, parseInt(copies || label_data.copies, 10) || 1);
+    const payloadData = { ...label_data, copies: mergedCopies };
+
+    let payloadString = '';
+    let protocol = 'tspl';
+
+    if (isZebra) {
+      protocol = 'zpl';
+      payloadString = this.buildZplLabel(payloadData);
+    } else if (isTsc || targetPrinter.type === 'usb' || !targetPrinter.ip_address) {
+      protocol = 'tspl';
+      payloadString = this.buildTsplLabel(payloadData);
+    } else {
+      protocol = 'escpos';
+      payloadString = SerialNumberService.buildEscposSerialBarcode({
+        serialNumber: payloadData.barcode || payloadData.serialNumber,
+        productName: payloadData.productName,
+        sku: payloadData.sku,
+        storeName: payloadData.storeName
+      });
+    }
+
+    const payloadBuffer = Buffer.from(payloadString, 'utf8');
+
+    if (targetPrinter.type === 'usb' || (!targetPrinter.ip_address && process.platform === 'win32')) {
+      const result = await this.sendToWindowsSpooler(targetPrinter.name, payloadBuffer, `Barcode Label: ${payloadData.productName || payloadData.barcode}`);
+      return {
+        success: true,
+        protocol,
+        printer: {
+          name: targetPrinter.name,
+          type: 'usb',
+          driver_name: targetPrinter.driver_name,
+          port_name: targetPrinter.port_name
+        },
+        message: `Successfully printed barcode label on "${targetPrinter.name}" (${protocol.toUpperCase()})!`,
+        details: result
+      };
+    } else if (targetPrinter.ip_address) {
+      const result = await this.sendToPrinterSocket(targetPrinter.ip_address, targetPrinter.port || 9100, payloadBuffer);
+      return {
+        success: true,
+        protocol,
+        printer: {
+          name: targetPrinter.name,
+          type: 'lan',
+          ip: targetPrinter.ip_address,
+          port: targetPrinter.port || 9100
+        },
+        message: `Successfully dispatched barcode label to LAN printer "${targetPrinter.name}"!`,
+        details: result
+      };
+    } else {
+      throw new Error(`Unsupported printer connection configuration for "${targetPrinter.name}".`);
+    }
   }
   /**
    * Format line width dynamically according to printer paper width (58mm = 32 cols, 80mm = 48 cols)
