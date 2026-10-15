@@ -168,9 +168,9 @@ class MenuController {
         min_stock: req.body.min_stock !== undefined && req.body.min_stock !== '' ? parseFloat(req.body.min_stock) : (req.body.low_stock_threshold ? parseFloat(req.body.low_stock_threshold) : 0.000),
         linked_sales_account: req.body.linked_sales_account || 'Sales',
         linked_purchase_account: req.body.linked_purchase_account || 'Purchase',
-        open_qty_popup: req.body.open_qty_popup === '1' || req.body.open_qty_popup === 1 || req.body.open_qty_popup === true || req.body.open_qty_popup === 'true' ? 1 : 0,
-        open_price_popup: req.body.open_price_popup === '1' || req.body.open_price_popup === 1 || req.body.open_price_popup === true || req.body.open_price_popup === 'true' ? 1 : 0,
-        not_for_sale: req.body.not_for_sale === '1' || req.body.not_for_sale === 1 || req.body.not_for_sale === true || req.body.not_for_sale === 'true' ? 1 : 0
+        open_qty_popup: (req.body.open_qty_popup === '1' || req.body.open_qty_popup === 1 || req.body.open_qty_popup === true || req.body.open_qty_popup === 'true' || req.body.openQuantityPopup === true || req.body.openQuantityPopup === '1' || req.body.open_quantity_popup === true || req.body.open_quantity_popup === '1') ? 1 : 0,
+        open_price_popup: (req.body.open_price_popup === '1' || req.body.open_price_popup === 1 || req.body.open_price_popup === true || req.body.open_price_popup === 'true' || req.body.openPricePopup === true || req.body.openPricePopup === '1' || req.body.open_price_popup === true || req.body.open_price_popup === '1') ? 1 : 0,
+        not_for_sale: (req.body.not_for_sale === '1' || req.body.not_for_sale === 1 || req.body.not_for_sale === true || req.body.not_for_sale === 'true' || req.body.notForSale === true || req.body.notForSale === '1') ? 1 : 0
       };
 
       if (!itemData.category_id || !itemData.name || isNaN(itemData.price)) {
@@ -296,9 +296,15 @@ class MenuController {
         min_stock: req.body.min_stock !== undefined ? parseFloat(req.body.min_stock) : existingItem.min_stock,
         linked_sales_account: req.body.linked_sales_account !== undefined ? req.body.linked_sales_account : existingItem.linked_sales_account,
         linked_purchase_account: req.body.linked_purchase_account !== undefined ? req.body.linked_purchase_account : existingItem.linked_purchase_account,
-        open_qty_popup: req.body.open_qty_popup !== undefined ? (req.body.open_qty_popup === '1' || req.body.open_qty_popup === 1 || req.body.open_qty_popup === true || req.body.open_qty_popup === 'true' ? 1 : 0) : existingItem.open_qty_popup,
-        open_price_popup: req.body.open_price_popup !== undefined ? (req.body.open_price_popup === '1' || req.body.open_price_popup === 1 || req.body.open_price_popup === true || req.body.open_price_popup === 'true' ? 1 : 0) : existingItem.open_price_popup,
-        not_for_sale: req.body.not_for_sale !== undefined ? (req.body.not_for_sale === '1' || req.body.not_for_sale === 1 || req.body.not_for_sale === true || req.body.not_for_sale === 'true' ? 1 : 0) : existingItem.not_for_sale
+        open_qty_popup: (req.body.open_qty_popup !== undefined || req.body.openQuantityPopup !== undefined || req.body.open_quantity_popup !== undefined)
+          ? ((req.body.open_qty_popup === '1' || req.body.open_qty_popup === 1 || req.body.open_qty_popup === true || req.body.open_qty_popup === 'true' || req.body.openQuantityPopup === true || req.body.openQuantityPopup === '1' || req.body.open_quantity_popup === true || req.body.open_quantity_popup === '1') ? 1 : 0)
+          : (existingItem.open_qty_popup !== undefined && existingItem.open_qty_popup !== null ? existingItem.open_qty_popup : 0),
+        open_price_popup: (req.body.open_price_popup !== undefined || req.body.openPricePopup !== undefined || req.body.open_price_popup !== undefined)
+          ? ((req.body.open_price_popup === '1' || req.body.open_price_popup === 1 || req.body.open_price_popup === true || req.body.open_price_popup === 'true' || req.body.openPricePopup === true || req.body.openPricePopup === '1' || req.body.open_price_popup === true || req.body.open_price_popup === '1') ? 1 : 0)
+          : (existingItem.open_price_popup !== undefined && existingItem.open_price_popup !== null ? existingItem.open_price_popup : 0),
+        not_for_sale: (req.body.not_for_sale !== undefined || req.body.notForSale !== undefined)
+          ? ((req.body.not_for_sale === '1' || req.body.not_for_sale === 1 || req.body.not_for_sale === true || req.body.not_for_sale === 'true' || req.body.notForSale === true || req.body.notForSale === '1') ? 1 : 0)
+          : (existingItem.not_for_sale !== undefined && existingItem.not_for_sale !== null ? existingItem.not_for_sale : 0)
       };
 
       console.log(`[UPDATE MENU ITEM #${itemId}] "${itemData.name}" -> is_weight_based: ${itemData.is_weight_based} (${itemData.is_weight_based === 1 ? 'WEIGHT' : 'PCS'}), unit: "${itemData.unit}"`);
