@@ -176,7 +176,32 @@ class OrderController {
       if (!order) {
         return res.status(404).json({ error: 'Order not found.' });
       }
-      return res.json(order);
+
+      let totalSavedAmount = 0;
+      const items = (order.items || []).map(it => {
+        const itPrice = parseFloat(it.price || it.unit_price || 0);
+        const rawMrp = it.mrp !== undefined && it.mrp !== null ? parseFloat(it.mrp) : itPrice;
+        const itMrp = (!isNaN(rawMrp) && rawMrp >= itPrice) ? rawMrp : itPrice;
+        const itQty = it.is_weight_based ? (parseFloat(it.item_weight) || 1) : (parseFloat(it.quantity) || 1);
+        const itSaved = Math.max(0, itMrp - itPrice) * itQty;
+        totalSavedAmount += itSaved;
+        return {
+          ...it,
+          mrp: itMrp,
+          saved_amount: parseFloat(itSaved.toFixed(2))
+        };
+      });
+      totalSavedAmount += parseFloat(order.order?.discount_amount || 0);
+
+      return res.json({
+        ...order,
+        order: {
+          ...order.order,
+          saved_amount: parseFloat(totalSavedAmount.toFixed(2))
+        },
+        items,
+        saved_amount: parseFloat(totalSavedAmount.toFixed(2))
+      });
     } catch (err) {
       console.error(err);
       return res.status(500).json({ error: 'Failed to retrieve order details.' });
@@ -434,9 +459,31 @@ class OrderController {
       await PrinterService.reprintOrder(restaurantId, req.params.id);
       await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'ORDER_REPRINT', `Reprinted order receipt #${orderData.order.unique_order_number}`, req.ip);
 
+      let totalSavedAmount = 0;
+      const enrichedItems = (orderData.items || []).map(it => {
+        const itPrice = parseFloat(it.price || it.unit_price || 0);
+        const rawMrp = it.mrp !== undefined && it.mrp !== null ? parseFloat(it.mrp) : itPrice;
+        const itMrp = (!isNaN(rawMrp) && rawMrp >= itPrice) ? rawMrp : itPrice;
+        const itQty = it.is_weight_based ? (parseFloat(it.item_weight) || 1) : (parseFloat(it.quantity) || 1);
+        const itSaved = Math.max(0, itMrp - itPrice) * itQty;
+        totalSavedAmount += itSaved;
+        return {
+          ...it,
+          mrp: itMrp,
+          saved_amount: parseFloat(itSaved.toFixed(2))
+        };
+      });
+      totalSavedAmount += parseFloat(orderData.order?.discount_amount || 0);
+
       return res.json({
         message: 'Reprint job enqueued successfully.',
-        orderNumber: orderData.order.unique_order_number
+        orderNumber: orderData.order.unique_order_number,
+        order: {
+          ...orderData.order,
+          saved_amount: parseFloat(totalSavedAmount.toFixed(2))
+        },
+        items: enrichedItems,
+        saved_amount: parseFloat(totalSavedAmount.toFixed(2))
       });
     } catch (err) {
       console.error(err);

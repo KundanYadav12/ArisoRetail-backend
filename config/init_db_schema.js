@@ -208,6 +208,7 @@ async function initDBSchema() {
         show_tax_details TINYINT(1) DEFAULT 1,
         show_payment_details TINYINT(1) DEFAULT 1,
         show_footer_notes TINYINT(1) DEFAULT 1,
+        show_mrp_savings TINYINT(1) DEFAULT 1,
         kot_header VARCHAR(100) DEFAULT 'KITCHEN ORDER TICKET',
         kitchen_name VARCHAR(100) DEFAULT 'Main Kitchen',
         kot_footer_note VARCHAR(255) DEFAULT 'Prepare with priority',
@@ -218,6 +219,27 @@ async function initDBSchema() {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // Ensure orders table has printed_count and reprint_count
+    const orderCols = [
+      { name: 'printed_count', spec: 'INT NOT NULL DEFAULT 0' },
+      { name: 'reprint_count', spec: 'INT NOT NULL DEFAULT 0' }
+    ];
+    for (const col of orderCols) {
+      try {
+        await pool.query(`ALTER TABLE orders ADD COLUMN ${col.name} ${col.spec}`);
+      } catch (err) {}
+    }
+
+    // Ensure order_items table has mrp
+    try {
+      await pool.query('ALTER TABLE order_items ADD COLUMN mrp DECIMAL(10,2) DEFAULT NULL');
+    } catch (err) {}
+
+    // Ensure receipt_settings table has show_mrp_savings
+    try {
+      await pool.query('ALTER TABLE receipt_settings ADD COLUMN show_mrp_savings TINYINT(1) DEFAULT 1');
+    } catch (err) {}
 
     // 8. Ensure audit_logs table exists
     await pool.query(`

@@ -148,38 +148,94 @@ class PdfReceiptService {
           doc.text(`Place of Supply: ${order.tax_type === 'inter' ? 'Inter-State (IGST)' : 'Intra-State (CGST+SGST)'}`);
         }
 
+        // Duplicate / Reprint Banner
+        if ((order.reprint_count && order.reprint_count > 0) || order.is_duplicate) {
+          doc.moveDown(0.3);
+          doc.font('Helvetica-Bold')
+             .fontSize(8)
+             .fillColor('#b45309')
+             .text(`*** DUPLICATE RECEIPT (REPRINT #${order.reprint_count || 1}) ***`, { align: 'center', width: usableWidth })
+             .fillColor('#000000')
+             .fontSize(7);
+        }
+
         doc.moveDown(0.5);
         doc.strokeColor('#cccccc')
+           .lineWidth(0.5)
            .moveTo(margin, doc.y)
            .lineTo(pageWidth - margin, doc.y)
            .stroke();
         doc.moveDown(0.3);
 
-        // 4. Items Table
-        doc.font('Helvetica-Bold')
-           .text('Item', margin, doc.y, { width: usableWidth * 0.45, continued: true })
-           .text('Qty', { width: usableWidth * 0.15, align: 'right', continued: true })
-           .text('Rate', { width: usableWidth * 0.20, align: 'right', continued: true })
-           .text('Total', { width: usableWidth * 0.20, align: 'right' });
-        doc.moveDown(0.2);
+        const showMrpSavings = settings.show_mrp_savings !== 0 && settings.show_mrp_savings !== false && settings.show_mrp_savings !== '0' && settings.show_mrp_savings !== 'false';
 
-        doc.font('Helvetica');
+        let itemsSavingSum = 0;
         items.forEach((item) => {
-          const qty = item.quantity || 1;
-          const rate = parseFloat(item.price || 0);
-          const total = parseFloat(item.total_price || (qty * rate));
-          
-          doc.text(item.name, margin, doc.y, { width: usableWidth * 0.45, continued: true })
-             .text(String(qty), { width: usableWidth * 0.15, align: 'right', continued: true })
-             .text(rate.toFixed(2), { width: usableWidth * 0.20, align: 'right', continued: true })
-             .text(total.toFixed(2), { width: usableWidth * 0.20, align: 'right' });
-          if (item.serial_number) {
-            doc.fontSize(6).font('Helvetica-Bold')
-               .text(`  SN: ${item.serial_number}`, margin, doc.y, { width: usableWidth });
-            doc.fontSize(7).font('Helvetica');
-          }
-          doc.moveDown(0.15);
+          const price = parseFloat(item.price || item.unit_price || 0);
+          const qty = item.is_weight_based ? (parseFloat(item.item_weight) || 1) : (parseFloat(item.quantity ?? item.qty ?? 1) || 1);
+          const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : price;
+          const effectiveMrp = (!isNaN(rawMrp) && rawMrp > price) ? rawMrp : price;
+          itemsSavingSum += Math.max(0, effectiveMrp - price) * qty;
         });
+        const totalYouSaved = itemsSavingSum + (parseFloat(order.discount_amount || 0) || 0);
+
+        // 4. Items Table
+        if (showMrpSavings) {
+          // Columns: Item (34%), Qty (12%), MRP (18%), Price (18%), Amount (18%)
+          doc.font('Helvetica-Bold')
+             .text('Item', margin, doc.y, { width: usableWidth * 0.34, continued: true })
+             .text('Qty', { width: usableWidth * 0.12, align: 'center', continued: true })
+             .text('MRP', { width: usableWidth * 0.18, align: 'right', continued: true })
+             .text('Price', { width: usableWidth * 0.18, align: 'right', continued: true })
+             .text('Amount', { width: usableWidth * 0.18, align: 'right' });
+          doc.moveDown(0.2);
+
+          doc.font('Helvetica');
+          items.forEach((item) => {
+            const price = parseFloat(item.price || item.unit_price || 0);
+            const qty = item.is_weight_based ? `${item.item_weight}${item.weight_unit || 'kg'}` : String(item.quantity || 1);
+            const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : price;
+            const effectiveMrp = (!isNaN(rawMrp) && rawMrp > price) ? rawMrp : price;
+            const total = parseFloat(item.total_price || (price * (parseFloat(item.quantity || 1))));
+
+            doc.text(item.name || 'Item', margin, doc.y, { width: usableWidth * 0.34, continued: true })
+               .text(qty, { width: usableWidth * 0.12, align: 'center', continued: true })
+               .text(effectiveMrp.toFixed(2), { width: usableWidth * 0.18, align: 'right', continued: true })
+               .text(price.toFixed(2), { width: usableWidth * 0.18, align: 'right', continued: true })
+               .text(total.toFixed(2), { width: usableWidth * 0.18, align: 'right' });
+            if (item.serial_number) {
+              doc.fontSize(6).font('Helvetica-Bold')
+                 .text(`  SN: ${item.serial_number}`, margin, doc.y, { width: usableWidth });
+              doc.fontSize(7).font('Helvetica');
+            }
+            doc.moveDown(0.15);
+          });
+        } else {
+          doc.font('Helvetica-Bold')
+             .text('Item', margin, doc.y, { width: usableWidth * 0.45, continued: true })
+             .text('Qty', { width: usableWidth * 0.15, align: 'right', continued: true })
+             .text('Rate', { width: usableWidth * 0.20, align: 'right', continued: true })
+             .text('Total', { width: usableWidth * 0.20, align: 'right' });
+          doc.moveDown(0.2);
+
+          doc.font('Helvetica');
+          items.forEach((item) => {
+            const qty = item.quantity || 1;
+            const rate = parseFloat(item.price || 0);
+            const total = parseFloat(item.total_price || (qty * rate));
+            
+            doc.text(item.name, margin, doc.y, { width: usableWidth * 0.45, continued: true })
+               .text(String(qty), { width: usableWidth * 0.15, align: 'right', continued: true })
+               .text(rate.toFixed(2), { width: usableWidth * 0.20, align: 'right', continued: true })
+               .text(total.toFixed(2), { width: usableWidth * 0.20, align: 'right' });
+            if (item.serial_number) {
+              doc.fontSize(6).font('Helvetica-Bold')
+                 .text(`  SN: ${item.serial_number}`, margin, doc.y, { width: usableWidth });
+              doc.fontSize(7).font('Helvetica');
+            }
+            doc.moveDown(0.15);
+          });
+        }
 
         doc.moveDown(0.5);
         doc.strokeColor('#cccccc')
@@ -227,6 +283,17 @@ class PdfReceiptService {
         
         doc.moveDown(0.2);
         drawTotalLine('GRAND TOTAL:', `Rs. ${grandTotal}`, true);
+
+        if (showMrpSavings && totalYouSaved > 0) {
+          doc.moveDown(0.2);
+          doc.font('Helvetica-Bold')
+             .fontSize(8)
+             .fillColor('#16a34a')
+             .text('You Saved (Rs.):', margin, doc.y, { width: usableWidth * 0.6, continued: true })
+             .text(totalYouSaved.toFixed(2), { width: usableWidth * 0.4, align: 'right' })
+             .fillColor('#000000')
+             .fontSize(7);
+        }
         doc.moveDown(0.4);
 
         // 6. Footer Messages

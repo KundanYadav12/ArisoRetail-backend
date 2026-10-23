@@ -395,15 +395,19 @@ class OrderRepository {
             : (Math.abs(originalRate - unitRate) > 0.001 ? 1 : 0);
           const itemCashierId = item.cashier_id || item.cashierId || cashier_id || orderData.cashier_id || null;
 
+          const rawPrice = item.unitPrice !== undefined ? item.unitPrice : (item.price || 0);
+          const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : null;
+          const itemMrp = (rawMrp !== null && !isNaN(rawMrp)) ? rawMrp : parseFloat(rawPrice || 0);
+
           await connection.execute(
-            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, original_rate, unit_rate, rate_overridden, cashier_id, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, serial_number, notes, delivered_qty, invoiced_qty, hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount) ' +
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, original_rate, unit_rate, rate_overridden, cashier_id, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, serial_number, notes, delivered_qty, invoiced_qty, hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount, mrp) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
               orderId, menuItemId || null, item.name || item.item_name || 'Item', item.name || item.item_name || 'Item',
               item.unitPrice, item.unitPrice, originalRate, unitRate, isRateOverridden, itemCashierId, item.gstRate,
               item.totalTax, item.discountAmount, itemQuantity,
               itemWeight !== undefined ? itemWeight : null, weightUnit || null, baseUnitPrice !== undefined ? baseUnitPrice : null, barcode || null, serialNumber || null, item.notes || null,
-              item.hsnCode || null, item.taxableAmount, item.cgstRate, item.cgstAmount, item.sgstRate, item.sgstAmount, item.igstRate, item.igstAmount
+              item.hsnCode || null, item.taxableAmount, item.cgstRate, item.cgstAmount, item.sgstRate, item.sgstAmount, item.igstRate, item.igstAmount, itemMrp
             ]
           );
 
@@ -1060,7 +1064,7 @@ class OrderRepository {
 
   static async incrementReprintCount(id, restaurantId) {
     const [result] = await pool.execute(
-      'UPDATE orders SET printed_count = printed_count + 1 WHERE id = ? AND restaurant_id = ?',
+      'UPDATE orders SET printed_count = printed_count + 1, reprint_count = reprint_count + 1 WHERE id = ? AND restaurant_id = ?',
       [id, restaurantId]
     );
     return result.affectedRows > 0;
@@ -1299,13 +1303,16 @@ class OrderRepository {
           const isRateOverridden = item.rate_overridden !== undefined ? (item.rate_overridden ? 1 : 0) : (Math.abs(originalRate - unitRate) > 0.001 ? 1 : 0);
           const itemCashierId = item.cashier_id || orderData.cashier_id || null;
 
+          const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : itemPrice;
+          const itemMrp = (rawMrp !== null && !isNaN(rawMrp)) ? rawMrp : itemPrice;
+
           await connection.execute(
-            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, original_rate, unit_rate, rate_overridden, cashier_id, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, notes) ' +
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO order_items (order_id, menu_item_id, item_name, name, unit_price, price, original_rate, unit_rate, rate_overridden, cashier_id, gst_rate, tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, notes, mrp) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
               id, menuItemId, item.name, item.name, itemPrice, itemPrice, originalRate, unitRate, isRateOverridden, itemCashierId, itemGstRate,
               itemTax, item.discount_amount || 0.00, itemQuantity,
-              itemWeight, weightUnit, baseUnitPrice, barcode, item.notes || null
+              itemWeight, weightUnit, baseUnitPrice, barcode, item.notes || null, itemMrp
             ]
           );
 
@@ -1643,17 +1650,20 @@ class OrderRepository {
       // 6. Insert invoice items & update parent order_items invoiced_qty & deduct physical inventory stock
       for (const it of invoiceItemsList) {
         // Insert into child order_items with line tax snapshot
+        const rawMrp = it.mrp !== undefined && it.mrp !== null ? parseFloat(it.mrp) : it.unitPrice;
+        const itMrp = (rawMrp !== null && !isNaN(rawMrp)) ? rawMrp : it.unitPrice;
+
         await connection.execute(
           `INSERT INTO order_items (
             order_id, menu_item_id, item_name, name, unit_price, price, gst_rate,
             tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, notes,
-            delivered_qty, invoiced_qty, hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            delivered_qty, invoiced_qty, hsn_code, taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount, mrp
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             invoiceId, it.menuItemId, it.name, it.name, it.unitPrice, it.unitPrice, it.gstRate,
             it.lineTax, it.lineDisc, it.quantity, it.itemWeight, it.weightUnit, it.baseUnitPrice, it.barcode, it.notes,
             it.invoiceQty, it.invoiceQty,
-            it.hsnCode || null, it.taxableAmount || 0, it.cgstRate || 0, it.cgstAmount || 0, it.sgstRate || 0, it.sgstAmount || 0, it.igstRate || 0, it.igstAmount || 0
+            it.hsnCode || null, it.taxableAmount || 0, it.cgstRate || 0, it.cgstAmount || 0, it.sgstRate || 0, it.sgstAmount || 0, it.igstRate || 0, it.igstAmount || 0, itMrp
           ]
         );
 
@@ -1962,15 +1972,18 @@ class OrderRepository {
 
       // 3. Insert items and reserve stock for each item
       for (const it of items) {
+        const rawMrp = it.mrp !== undefined && it.mrp !== null ? parseFloat(it.mrp) : parseFloat(it.unit_price || it.price || 0);
+        const itMrp = (rawMrp !== null && !isNaN(rawMrp)) ? rawMrp : parseFloat(it.unit_price || it.price || 0);
+
         await connection.execute(
           `INSERT INTO order_items (
             order_id, menu_item_id, item_name, name, unit_price, price, gst_rate,
             tax_amount, discount_amount, quantity, item_weight, weight_unit, base_unit_price, barcode, notes,
-            delivered_qty, invoiced_qty
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+            delivered_qty, invoiced_qty, mrp
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)`,
           [
             soId, it.menu_item_id, it.item_name, it.name, it.unit_price, it.price, it.gst_rate,
-            it.tax_amount, it.discount_amount, it.quantity, it.item_weight, it.weight_unit, it.base_unit_price, it.barcode, it.notes
+            it.tax_amount, it.discount_amount, it.quantity, it.item_weight, it.weight_unit, it.base_unit_price, it.barcode, it.notes, itMrp
           ]
         );
 

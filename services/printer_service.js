@@ -1345,6 +1345,18 @@ Write-Output $res
     }
     cmds += divider;
 
+    const showMrpSavings = s.show_mrp_savings !== 0 && s.show_mrp_savings !== false && s.show_mrp_savings !== '0' && s.show_mrp_savings !== 'false';
+
+    let itemsSavingSum = 0;
+    (items || []).forEach((item) => {
+      const price = parseFloat(item.price || item.unit_price || 0);
+      const qty = item.is_weight_based ? (parseFloat(item.item_weight) || 1) : (parseFloat(item.quantity ?? item.qty ?? 1) || 1);
+      const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : price;
+      const effectiveMrp = (!isNaN(rawMrp) && rawMrp > price) ? rawMrp : price;
+      itemsSavingSum += Math.max(0, effectiveMrp - price) * qty;
+    });
+    const totalYouSaved = itemsSavingSum + (parseFloat(order.discount_amount || 0) || 0);
+
     // Items List
     if (is58mm) {
       cmds += CMD_BOLD_ON + `ITEM NAME         QTY/WT    AMOUNT\n` + CMD_BOLD_OFF;
@@ -1361,6 +1373,8 @@ Write-Output $res
           name = `${firstLine}\n${secondLine}`;
         }
         const price = parseFloat(item.price || item.unit_price || 0);
+        const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : price;
+        const mrpVal = (!isNaN(rawMrp) && rawMrp > price) ? rawMrp : price;
         const total = parseFloat(item.total_price || (price * (item.quantity || item.item_weight || 1))).toFixed(2);
         
         let qtyWtStr = '';
@@ -1374,9 +1388,44 @@ Write-Output $res
           qtyWtStr = `${qty}${unit}@Rs.${price.toFixed(2)}`;
         }
 
-        cmds += `${name}\n  ${qtyWtStr.padEnd(18, ' ')} Rs.${total.padStart(8, ' ')}\n`;
+        if (showMrpSavings && mrpVal > price) {
+          cmds += `${name}\n  ${qtyWtStr.padEnd(14, ' ')} [MRP ${mrpVal.toFixed(2)}] Rs.${total.padStart(7, ' ')}\n`;
+        } else {
+          cmds += `${name}\n  ${qtyWtStr.padEnd(18, ' ')} Rs.${total.padStart(8, ' ')}\n`;
+        }
         if (item.serial_number) cmds += `  SN: ${item.serial_number}\n`;
         if (item.notes) cmds += `  * ${item.notes}\n`;
+      });
+    } else if (showMrpSavings) {
+      cmds += CMD_BOLD_ON + `SN ITEM         QTY    MRP  PRICE AMOUNT\n` + CMD_BOLD_OFF;
+      cmds += divider;
+      items.forEach((item, idx) => {
+        const isWeight = !!item.is_weight_based;
+        const qtyStr = isWeight ? `${item.item_weight} ${item.weight_unit || 'kg'}` : `${item.quantity || 1}`;
+        const priceVal = parseFloat(item.price || item.unit_price || 0);
+        const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : priceVal;
+        const mrpVal = (!isNaN(rawMrp) && rawMrp > priceVal) ? rawMrp : priceVal;
+        const totalVal = parseFloat(item.total_price || (priceVal * (item.quantity || 1)));
+
+        const rateStr = priceVal.toFixed(2);
+        const mrpStr = mrpVal.toFixed(2);
+        const totalStr = totalVal.toFixed(2);
+
+        const snStr = String(idx + 1).padEnd(3, ' ');
+        const rawName = item.name || 'Item';
+        if (rawName.length > 12) {
+          cmds += `${snStr}${rawName}\n`;
+          cmds += `   `.padEnd(16, ' ') +
+                  `${qtyStr.padStart(4, ' ')} ` +
+                  `${mrpStr.padStart(6, ' ')} ` +
+                  `${rateStr.padStart(6, ' ')} ` +
+                  `${totalStr.padStart(7, ' ')}\n`;
+        } else {
+          const namePart = rawName.padEnd(13, ' ');
+          cmds += `${snStr}${namePart}${qtyStr.padStart(4, ' ')} ${mrpStr.padStart(6, ' ')} ${rateStr.padStart(6, ' ')} ${totalStr.padStart(7, ' ')}\n`;
+        }
+        if (item.serial_number) cmds += `  SN: ${item.serial_number}\n`;
+        if (item.notes) cmds += `  * Notes: ${item.notes}\n`;
       });
     } else {
       cmds += CMD_BOLD_ON + `ITEM NAME               QTY/WT     RATE       TOTAL\n` + CMD_BOLD_OFF;
@@ -1462,6 +1511,13 @@ Write-Output $res
       cmds += CMD_FONT_DOUBLE;
     }
     cmds += PrinterService.formatTwoColumns('TOTAL:', `Rs. ${totalVal.toFixed(2)}`, cols) + '\n' + CMD_FONT_NORMAL + CMD_BOLD_OFF;
+
+    if (showMrpSavings && totalYouSaved > 0) {
+      cmds += doubleDivider;
+      cmds += CMD_BOLD_ON;
+      cmds += PrinterService.formatTwoColumns('You Saved (Rs.):', `${totalYouSaved.toFixed(2)}`, cols) + '\n';
+      cmds += CMD_BOLD_OFF;
+    }
     cmds += doubleDivider;
 
     // GST Slabs Summary
@@ -1654,7 +1710,11 @@ Write-Output $res
       const createdJobIds = [];
 
       if (finalActions.includes('RECEIPT') && order && restaurant) {
-        const receiptPrinter = await PrinterRepository.getDefaultReceiptPrinter(restaurantId);
+        let receiptPrinter = await PrinterRepository.getDefaultReceiptPrinter(restaurantId);
+        if (!receiptPrinter || (receiptPrinter.ip_address && !(await this.testSocketReachability(receiptPrinter.ip_address, receiptPrinter.port || 9100, 500)))) {
+          const autoPrn = await this.autoResolveAndSyncPrinter(restaurantId).catch(() => null);
+          if (autoPrn) receiptPrinter = autoPrn;
+        }
         const receiptBuffer = await this.buildReceiptPayload(order, items, restaurant, receiptPrinter, receiptSettings);
         
         const jobId = await PrintQueueRepository.enqueue({
