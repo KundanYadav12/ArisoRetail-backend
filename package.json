@@ -6,11 +6,14 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "create-superadmin": "node scripts/create_superadmin.js",
+    "superadmin:create": "node scripts/superadmin_create.js",
+    "superadmin:reset-password": "node scripts/superadmin_reset_password.js",
+    "superadmin:check": "node scripts/superadmin_check.js",
+    "create-superadmin": "node scripts/superadmin_create.js",
     "deactivate-superadmin": "node scripts/deactivate_superadmin.js",
     "reactivate-superadmin": "node scripts/reactivate_superadmin.js",
-    "reset-superadmin-password": "node scripts/reset_superadmin_password.js",
-    "list-superadmins": "node scripts/list_superadmins.js",
+    "reset-superadmin-password": "node scripts/superadmin_reset_password.js",
+    "list-superadmins": "node scripts/superadmin_check.js",
     "migrate": "node migrations/runner.js",
     "migrate:status": "node migrations/status.js"
   },
@@ -28,7 +31,8 @@
     "multer": "^1.4.5-lts.1",
     "mysql2": "^3.9.7",
     "nodemailer": "^9.0.3",
-    "pdfkit": "^0.20.2"
+    "pdfkit": "^0.20.2",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
