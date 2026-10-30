@@ -31,6 +31,8 @@ const paymentReconciliationRoutes = require('./routes/payment_reconciliation_rou
 const heldReceiptRoutes = require('./routes/held_receipt_routes');
 const customerReceivableRoutes = require('./routes/customer_receivable_routes');
 const serialNumberRoutes = require('./routes/serial_number_routes');
+const storefrontPublicRoutes = require('./routes/storefront_public_routes');
+const storefrontMerchantRoutes = require('./routes/storefront_merchant_routes');
 
 const { apiLimiter, authLimiter } = require('./middlewares/rate_limiter_middleware');
 const { addClient, removeClient } = require('./services/realtime_service');
@@ -76,6 +78,7 @@ const corsOptions = {
     }
 
     if (
+      origin.endsWith('.arisopos.in') ||
       origin.endsWith('.arisotechnologies.com') ||
       origin.endsWith('.duckdns.org') ||
       origin.endsWith('.arisoretail.duckdns.org')
@@ -140,6 +143,8 @@ app.use('/api/payment-reconciliation', paymentReconciliationRoutes);
 app.use('/api/held-receipts', heldReceiptRoutes);
 app.use('/api/receivables', customerReceivableRoutes);
 app.use('/api/serial-numbers', serialNumberRoutes);
+app.use('/api/store', storefrontPublicRoutes);
+app.use('/api/merchant/store', storefrontMerchantRoutes);
 
 const ThemeController = require('./controllers/theme_controller');
 app.get('/api/theme/config', ThemeController.getTheme);

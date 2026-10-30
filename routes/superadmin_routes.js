@@ -45,4 +45,19 @@ router.get('/ai-config', SuperAdminController.getAiConfig);
 router.put('/ai-config', SuperAdminController.updateAiConfig);
 router.post('/ai-config/test', SuperAdminController.testAiConnection);
 
+// Merchant Store & Custom Subdomain Management Routes
+const StorefrontSuperAdminController = require('../controllers/storefront_superadmin_controller');
+router.get('/merchant-stores', StorefrontSuperAdminController.getMerchantStores);
+router.get('/merchant-stores/check-subdomain', StorefrontSuperAdminController.checkSubdomainAvailability);
+router.put('/merchant-stores/:id/subdomain', StorefrontSuperAdminController.assignSubdomain);
+router.patch('/merchant-stores/:id/toggle-status', StorefrontSuperAdminController.toggleStoreStatus);
+router.get('/merchant-stores/:id/qr', StorefrontSuperAdminController.getStoreQr);
+
+// Custom Domain Management
+router.get('/merchant-stores/:id/custom-domain', StorefrontSuperAdminController.getCustomDomain);
+router.post('/merchant-stores/:id/custom-domain', StorefrontSuperAdminController.assignCustomDomain);
+router.post('/merchant-stores/:id/custom-domain/verify', StorefrontSuperAdminController.verifyCustomDomain);
+router.patch('/merchant-stores/:id/custom-domain/toggle', StorefrontSuperAdminController.toggleCustomDomain);
+router.delete('/merchant-stores/:id/custom-domain', StorefrontSuperAdminController.deleteCustomDomain);
+
 module.exports = router;
