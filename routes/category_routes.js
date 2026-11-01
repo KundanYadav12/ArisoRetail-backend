@@ -1,9 +1,10 @@
 const express = require('express');
 const CategoryController = require('../controllers/category_controller');
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, enforceTenantScope } = require('../middlewares/auth_middleware');
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(enforceTenantScope);
 
 router.get('/', CategoryController.getAll);
 router.get('/:id', CategoryController.getById);

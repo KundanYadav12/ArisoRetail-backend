@@ -58,9 +58,10 @@ class AuthController {
 
       const sessionId = crypto.randomUUID();
 
+      const effectiveRestaurantId = user.restaurant_id !== undefined && user.restaurant_id !== null ? Number(user.restaurant_id) : null;
       const tokenPayload = {
         id: user.id,
-        restaurant_id: user.restaurant_id || 1,
+        restaurant_id: effectiveRestaurantId,
         role: user.role,
         shift_id: activeShiftId,
         session_id: sessionId
@@ -70,12 +71,13 @@ class AuthController {
       const refreshToken = jwt.sign(tokenPayload, JWT_REFRESH_SECRET, { expiresIn: JWT_REFRESH_EXPIRY });
 
       await pool.query('UPDATE users SET active_session_id = ?, last_login_at = NOW() WHERE id = ?', [sessionId, user.id]);
-      await SuperAdminRepository.addAuditLog(user.restaurant_id || 1, user.id, 'LOGIN', 'Logged into the system successfully', ipAddress);
+      await SuperAdminRepository.addAuditLog(user.restaurant_id || null, user.id, 'LOGIN', 'Logged into the system successfully', ipAddress);
 
       let restInfo = {};
-      const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url, subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled, feature_serial_numbers, reconciliation_enabled FROM restaurants WHERE id = ?', [targetRestId]);
-      if (rRows.length > 0) restInfo = rRows[0];
+      if (user.restaurant_id) {
+        const [rRows] = await pool.query('SELECT name, logo_url, subscription_status, subscription_expires_at, feature_superbill, barcode_scanner_enabled, feature_serial_numbers, reconciliation_enabled FROM restaurants WHERE id = ?', [user.restaurant_id]);
+        if (rRows.length > 0) restInfo = rRows[0];
+      }
 
       let whName = null;
       if (user.assigned_warehouse_id) {
@@ -109,7 +111,7 @@ class AuthController {
           username: user.username,
           email: user.email,
           role: user.role,
-          restaurant_id: targetRestId,
+          restaurant_id: effectiveRestaurantId,
           restaurant_name: restInfo.name || user.name || 'Ariso Retail Store',
           restaurant_logo_url: restInfo.logo_url || null,
           subscription_status: isSubExpired ? 'expired' : (restInfo.subscription_status || 'active'),
@@ -572,9 +574,10 @@ class AuthController {
       const refreshToken = jwt.sign(tokenPayload, JWT_REFRESH_SECRET, { expiresIn: JWT_REFRESH_EXPIRY });
 
       let restInfo = {};
-      const targetRestId = user.restaurant_id || 1;
-      const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, feature_serial_numbers, reconciliation_enabled FROM restaurants WHERE id = ?', [targetRestId]);
-      if (rRows.length > 0) restInfo = rRows[0];
+      if (user.restaurant_id) {
+        const [rRows] = await pool.query('SELECT name, logo_url, feature_superbill, feature_serial_numbers, reconciliation_enabled FROM restaurants WHERE id = ?', [user.restaurant_id]);
+        if (rRows.length > 0) restInfo = rRows[0];
+      }
 
       return res.json({
         accessToken,

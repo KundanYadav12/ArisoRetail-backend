@@ -4,9 +4,10 @@ const InventoryController = require('../controllers/inventory_controller');
 const SupplierPayableController = require('../controllers/supplier_payable_controller');
 const WarehouseRackController = require('../controllers/warehouse_rack_controller');
 const StockCountingController = require('../controllers/stock_counting_controller');
-const { authenticateToken, authorizeRoles, requirePermission, enforceWarehouseScope } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, requirePermission, enforceWarehouseScope, enforceTenantScope } = require('../middlewares/auth_middleware');
 
 router.use(authenticateToken);
+router.use(enforceTenantScope);
 router.use(authorizeRoles('admin', 'manager', 'super_admin', 'superadmin', 'salesman', 'warehouse_manager', 'cashier'));
 router.use(enforceWarehouseScope);
 

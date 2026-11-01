@@ -1,9 +1,10 @@
 const express = require('express');
 const PrinterController = require('../controllers/printer_controller');
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, enforceTenantScope } = require('../middlewares/auth_middleware');
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(enforceTenantScope);
 
 // All logged in staff can see the printer mapping, discover LAN/USB printers, and run test prints
 router.get('/', PrinterController.getAll);

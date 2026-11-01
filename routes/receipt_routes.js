@@ -1,15 +1,19 @@
 const express = require('express');
 const router = express.Router();
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, enforceTenantScope } = require('../middlewares/auth_middleware');
 const ReceiptRepository = require('../repositories/receipt_repository');
 const SuperAdminRepository = require('../repositories/superadmin_repository');
 const PrinterRepository = require('../repositories/printer_repository');
 const PrinterService = require('../services/printer_service');
 
+router.use(authenticateToken);
+router.use(enforceTenantScope);
+
 // GET /api/settings/receipt/logo-bytes - Fetch base64 ESC/POS logo bytes
 router.get('/logo-bytes', authenticateToken, async (req, res) => {
   try {
-    const restaurantId = req.user.restaurant_id || 1;
+    const restaurantId = req.user.restaurant_id;
+    if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
     const settings = await ReceiptRepository.getByRestaurantId(restaurantId);
     if (!settings || settings.show_logo === 0 || !settings.logo_url) {
       return res.json({ bytes: '' });
@@ -28,7 +32,8 @@ router.get('/logo-bytes', authenticateToken, async (req, res) => {
 // GET /api/settings/receipt - Fetch settings
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const restaurantId = req.user.restaurant_id || req.query.restaurant_id || 1;
+    const restaurantId = req.user.restaurant_id;
+    if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
     const settings = await ReceiptRepository.getByRestaurantId(restaurantId);
     return res.json(settings);
   } catch (err) {
@@ -40,7 +45,8 @@ router.get('/', authenticateToken, async (req, res) => {
 // POST /api/settings/receipt - Update settings (Admin/Manager only)
 router.post('/', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), async (req, res) => {
   try {
-    const restaurantId = req.user.restaurant_id || req.body.restaurant_id || 1;
+    const restaurantId = req.user.restaurant_id;
+    if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
     const updatedSettings = await ReceiptRepository.update(restaurantId, req.body);
     return res.json({ message: 'Receipt & KOT settings updated successfully.', settings: updatedSettings });
   } catch (err) {
@@ -52,7 +58,8 @@ router.post('/', authenticateToken, authorizeRoles('admin', 'manager', 'super_ad
 // POST /api/settings/receipt/test-print - Test print sample receipt & KOT
 router.post('/test-print', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), async (req, res) => {
   try {
-    const restaurantId = req.user.restaurant_id || req.body.restaurant_id || 1;
+    const restaurantId = req.user.restaurant_id;
+    if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
     const printType = (req.body.print_type || 'BOTH').toUpperCase(); // RECEIPT, KOT, or BOTH
 
     // Sample mock order for test print
