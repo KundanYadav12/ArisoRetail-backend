@@ -876,10 +876,13 @@ class StorefrontRepository {
 
     const r = rows[0];
     const storeUrl = r.subdomain ? `https://${r.subdomain}.arisopos.in` : null;
+    const storeUrlDuckDns = r.subdomain ? `https://${r.subdomain}.arisoretail.duckdns.org` : null;
 
     return {
       ...r,
       store_url: storeUrl,
+      store_url_duckdns: storeUrlDuckDns,
+      store_url_arisopos: storeUrl,
       online_store_enabled: Boolean(r.online_store_enabled)
     };
   }
@@ -1198,6 +1201,8 @@ class StorefrontRepository {
       logo_url: r.logo_url,
       created_at: r.created_at,
       store_url: r.subdomain ? `https://${r.subdomain}.arisopos.in` : null,
+      store_url_duckdns: r.subdomain ? `https://${r.subdomain}.arisoretail.duckdns.org` : null,
+      store_url_arisopos: r.subdomain ? `https://${r.subdomain}.arisopos.in` : null,
       custom_domain: r.custom_domain ? {
         id: r.custom_domain_id,
         domain: r.custom_domain,

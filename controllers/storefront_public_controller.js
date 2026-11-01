@@ -22,20 +22,48 @@ class StorefrontPublicController {
     const cleanHost = rawHost.split(',')[0].split(':')[0].trim().toLowerCase();
 
     // Check for *.arisopos.in or *.localhost
-    if (cleanHost.endsWith('.arisopos.in')) {
-      const sub = cleanHost.replace('.arisopos.in', '').trim();
-      if (sub && sub !== 'www' && sub !== 'api') return sub;
-    }
-    if (cleanHost.endsWith('.localhost')) {
-      const sub = cleanHost.replace('.localhost', '').trim();
-      if (sub && sub !== 'www' && sub !== 'api') return sub;
+    const reservedSubdomains = ['www', 'api', 'admin', 'superadmin', 'app', 'pos', 'retail', 'mail', 'smtp', 'console', 'dashboard', 'staff', 'billing', 'inventory'];
+
+    // 1. Check for *.arisoretail.duckdns.org (e.g. rampal.arisoretail.duckdns.org)
+    if (cleanHost.endsWith('.arisoretail.duckdns.org')) {
+      const sub = cleanHost.slice(0, -'.arisoretail.duckdns.org'.length).split('.')[0].trim();
+      if (sub && !reservedSubdomains.includes(sub)) return sub;
+      return null;
     }
 
-    // Custom domain support (e.g. parkashstore.com, www.parkashstore.com, nimal.in, sham.store)
-    const reservedRoots = ['localhost', '127.0.0.1', 'arisopos.in', 'arisotechnologies.com'];
-    if (!reservedRoots.includes(cleanHost) && cleanHost.includes('.')) {
+    // 2. Check for *.arisopos.in or *.localhost
+    if (cleanHost.endsWith('.arisopos.in')) {
+      const sub = cleanHost.slice(0, -'.arisopos.in'.length).split('.')[0].trim();
+      if (sub && !reservedSubdomains.includes(sub)) return sub;
+      return null;
+    }
+    if (cleanHost.endsWith('.localhost')) {
+      const sub = cleanHost.slice(0, -'.localhost'.length).split('.')[0].trim();
+      if (sub && sub !== 'localhost' && !reservedSubdomains.includes(sub)) return sub;
+      return null;
+    }
+
+    // Reserved platform roots (never treat platform domains as custom merchant storefronts)
+    const reservedRoots = [
+      'localhost',
+      '127.0.0.1',
+      '0.0.0.0',
+      'arisopos.in',
+      'arisotechnologies.com',
+      'duckdns.org',
+      'arisoretail.duckdns.org',
+      'ngrok-free.app',
+      'ngrok.io',
+      'loca.lt',
+      'trycloudflare.com'
+    ];
+
+    const isReserved = reservedRoots.some(r => cleanHost === r || cleanHost.endsWith('.' + r));
+    if (!isReserved && cleanHost.includes('.')) {
       return cleanHost;
     }
+
+    return null;
 
     return null;
   }
