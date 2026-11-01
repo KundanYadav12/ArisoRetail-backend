@@ -1,10 +1,11 @@
 const express = require('express');
 const HeldReceiptController = require('../controllers/held_receipt_controller');
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, enforceTenantScope } = require('../middlewares/auth_middleware');
 
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(enforceTenantScope);
 
 const staffRoles = ['cashier', 'salesman', 'admin', 'manager', 'owner', 'super_admin', 'superadmin'];
 

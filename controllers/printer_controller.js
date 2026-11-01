@@ -5,7 +5,8 @@ const net = require('net');
 class PrinterController {
   static async getAll(req, res) {
     try {
-      const restaurantId = req.user?.restaurant_id || 1;
+      const restaurantId = req.user?.restaurant_id;
+      if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
       let printers = await PrinterRepository.getAll(restaurantId);
 
       // If no printer is registered in DB, automatically scan local network and sync
@@ -29,7 +30,8 @@ class PrinterController {
    */
   static async discoverPrinters(req, res) {
     try {
-      const restaurantId = req.user?.restaurant_id || 1;
+      const restaurantId = req.user?.restaurant_id;
+      if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
       const PrinterService = require('../services/printer_service');
       const discovered = await PrinterService.discoverAllPrinters();
 
@@ -61,7 +63,8 @@ class PrinterController {
 
   static async getById(req, res) {
     try {
-      const restaurantId = req.user?.restaurant_id || 1;
+      const restaurantId = req.user?.restaurant_id;
+      if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
       const printer = await PrinterRepository.getById(req.params.id, restaurantId);
       if (!printer) {
         return res.status(404).json({ error: 'Printer configuration not found.' });
@@ -83,7 +86,8 @@ class PrinterController {
     }
 
     try {
-      const restaurantId = req.user?.restaurant_id || 1;
+      const restaurantId = req.user?.restaurant_id;
+      if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
       const printerId = await PrinterRepository.create(restaurantId, {
         name, type: type || (ip_address ? 'lan' : 'usb'), ip_address: ip_address || null, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer
       });
@@ -106,7 +110,8 @@ class PrinterController {
     }
 
     try {
-      const restaurantId = req.user?.restaurant_id || 1;
+      const restaurantId = req.user?.restaurant_id;
+      if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
       const success = await PrinterRepository.update(req.params.id, restaurantId, {
         name, type: type || (ip_address ? 'lan' : 'usb'), ip_address: ip_address || null, port, paper_width, character_encoding, role, is_default_receipt, is_default_kot, auto_cut, cash_drawer, is_active, status
       });
@@ -148,7 +153,8 @@ class PrinterController {
 
   static async delete(req, res) {
     try {
-      const restaurantId = req.user?.restaurant_id || 1;
+      const restaurantId = req.user?.restaurant_id;
+      if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
       const success = await PrinterRepository.delete(req.params.id, restaurantId);
       if (!success) {
         return res.status(404).json({ error: 'Printer not found or unauthorized.' });
@@ -167,7 +173,8 @@ class PrinterController {
    */
   static async testConnection(req, res) {
     const { id, ip_address, port, paper_width, name, type } = req.body;
-    const restaurantId = req.user?.restaurant_id || 1;
+    const restaurantId = req.user?.restaurant_id;
+    if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
     const PrinterService = require('../services/printer_service');
 
     let targetIp = ip_address;
@@ -318,7 +325,8 @@ class PrinterController {
    */
   static async printLabel(req, res) {
     try {
-      const restaurantId = req.user?.restaurant_id || 1;
+      const restaurantId = req.user?.restaurant_id;
+      if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
       const { printer_id, printer_name, label_data, copies, product_id, barcode, sku, productName, price, mrp, payload_base64 } = req.body;
       const PrinterService = require('../services/printer_service');
 

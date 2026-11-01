@@ -1,9 +1,10 @@
 const express = require('express');
 const OrderController = require('../controllers/order_controller');
-const { authenticateToken, authorizeRoles, requirePermission, enforceWarehouseScope } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, requirePermission, enforceWarehouseScope, enforceTenantScope } = require('../middlewares/auth_middleware');
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(enforceTenantScope);
 router.use(enforceWarehouseScope);
 
 // Staff members can place active ticket orders

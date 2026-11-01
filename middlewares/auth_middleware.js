@@ -96,10 +96,10 @@ async function authenticateToken(req, res, next) {
       parsedPermissions = ROLE_DEFAULT_PERMISSIONS[userRole] || (userRole === 'warehouse_manager' ? DEFAULT_WAREHOUSE_MANAGER_PERMISSIONS : []);
     }
 
-    // Attach user information to request
+    // Attach user information to request (Strict tenant isolation: never default to 1)
     req.user = {
       id: user.id,
-      restaurant_id: user.restaurant_id || 1,
+      restaurant_id: user.restaurant_id !== undefined && user.restaurant_id !== null ? Number(user.restaurant_id) : null,
       restaurant_name: user.restaurant_name || 'Ariso Retail Store',
       name: user.name,
       username: user.username,
@@ -315,13 +315,32 @@ function requireSuperAdminOrPermission(permissionKey = 'serial_numbers') {
   };
 }
 
+/**
+ * Shared Tenant Guard: Guarantees that non-superadmin accounts strictly possess a valid tenant restaurant_id
+ * Prevents requests from executing if tenant mapping is missing.
+ */
+function enforceTenantScope(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Access token required. Please login.' });
+  }
+  const userRole = (req.user.role || '').toLowerCase();
+  const isSuperAdmin = userRole === 'super_admin' || userRole === 'superadmin';
+  if (!isSuperAdmin) {
+    if (!req.user.restaurant_id || isNaN(Number(req.user.restaurant_id))) {
+      return res.status(403).json({ error: 'Access denied: User is not mapped to any valid restaurant tenant.' });
+    }
+  }
+  next();
+}
+
 module.exports = {
   authenticateToken,
   optionalAuthenticateToken,
   authorizeRoles,
   requirePermission,
   requireSuperAdminOrPermission,
-  enforceWarehouseScope
+  enforceWarehouseScope,
+  enforceTenantScope
 };
 
 

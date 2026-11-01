@@ -6,6 +6,9 @@ class CategoryController {
   static async getAll(req, res) {
     try {
       const restaurantId = req.user.restaurant_id;
+      if (!restaurantId) {
+        return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
+      }
       const categories = await CategoryRepository.getAll(restaurantId);
       return res.json(categories);
     } catch (err) {

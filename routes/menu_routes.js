@@ -1,6 +1,6 @@
 const express = require('express');
 const MenuController = require('../controllers/menu_controller');
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, enforceTenantScope } = require('../middlewares/auth_middleware');
 const upload = require('../middlewares/upload_middleware');
 const multer = require('multer');
 const path = require('path');
@@ -19,6 +19,7 @@ const { bulkLimiter } = require('../middlewares/rate_limiter_middleware');
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(enforceTenantScope);
 
 // Bulk Import & Bulk Operation Routes (Admin & Manager Only)
 router.get('/import-sample-template', authorizeRoles('admin', 'manager'), MenuController.downloadSampleTemplate);

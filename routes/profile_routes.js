@@ -3,8 +3,11 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth_middleware');
+const { authenticateToken, authorizeRoles, enforceTenantScope } = require('../middlewares/auth_middleware');
 const ProfileController = require('../controllers/profile_controller');
+
+router.use(authenticateToken);
+router.use(enforceTenantScope);
 
 const MIME_TO_EXT = {
   'image/jpeg': '.jpg',

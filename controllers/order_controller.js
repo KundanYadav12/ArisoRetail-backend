@@ -432,32 +432,53 @@ class OrderController {
 
   static async reprint(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id;
-      const orderData = await OrderRepository.getById(req.params.id, restaurantId);
-      if (!orderData) {
-        return res.status(404).json({ error: 'Order not found.' });
-      }
-
-      // Validate order reprint age window based on role (12h for cashier, 15d default for admin)
-      const orderDate = new Date(orderData.order.created_at);
-      const orderAgeMs = Date.now() - orderDate.getTime();
+      let restaurantId = req.user.restaurant_id;
       const role = (req.user.role || '').toLowerCase();
+      const isSuperAdmin = role === 'super_admin' || role === 'superadmin';
 
-      if (role === 'cashier') {
-        const twelveHoursMs = 12 * 60 * 60 * 1000;
-        if (orderAgeMs > twelveHoursMs) {
-          return res.status(403).json({ error: 'LIMIT_EXCEEDED', message: 'Cashiers are restricted to reprinting receipts within a 12-hour window only.' });
-        }
-      } else {
-        const fifteenDaysMs = 15 * 24 * 60 * 60 * 1000;
-        if (orderAgeMs > fifteenDaysMs) {
-          return res.status(403).json({ error: 'LIMIT_EXCEEDED', message: 'Admins are restricted to reprinting receipts within a 15-day window by default.' });
-        }
+      if (!restaurantId && !isSuperAdmin) {
+        return res.status(403).json({ error: 'Access denied: User is not mapped to any valid restaurant tenant.' });
       }
 
-      // Trigger dynamic in-memory reprint queue job
-      await PrinterService.reprintOrder(restaurantId, req.params.id);
-      await SuperAdminRepository.addAuditLog(restaurantId, req.user.id, 'ORDER_REPRINT', `Reprinted order receipt #${orderData.order.unique_order_number}`, req.ip);
+      let orderData = null;
+      if (restaurantId) {
+        orderData = await OrderRepository.getById(req.params.id, restaurantId);
+      } else if (isSuperAdmin) {
+        // Superadmin lookup: resolve restaurant from order
+        const [ordRows] = await OrderRepository.getOrderItems(req.params.id);
+        const [oRows] = await OrderRepository.getById(req.params.id, req.query.restaurant_id || 1);
+        orderData = oRows;
+      }
+
+      if (!orderData || !orderData.order) {
+        return res.status(404).json({ error: 'Order not found.', message: 'Order not found.' });
+      }
+
+      const effectiveRestaurantId = orderData.order.restaurant_id || restaurantId;
+
+      // Increment reprint count in database
+      try {
+        await OrderRepository.incrementReprintCount(req.params.id, effectiveRestaurantId);
+      } catch (incErr) {
+        console.warn('[OrderController.reprint] incrementReprintCount warning:', incErr.message);
+      }
+
+      // Trigger dynamic in-memory / cloud printer queue safely (failure must NOT block duplicate receipt output)
+      try {
+        await PrinterService.reprintOrder(effectiveRestaurantId, req.params.id);
+      } catch (pErr) {
+        console.warn('[OrderController.reprint] Server-side print queue warning:', pErr.message);
+      }
+
+      try {
+        await SuperAdminRepository.addAuditLog(
+          effectiveRestaurantId,
+          req.user.id,
+          'ORDER_REPRINT',
+          `Reprinted order receipt #${orderData.order.unique_order_number || orderData.order.id}`,
+          req.ip
+        );
+      } catch (_) {}
 
       let totalSavedAmount = 0;
       const enrichedItems = (orderData.items || []).map(it => {
@@ -475,19 +496,23 @@ class OrderController {
       });
       totalSavedAmount += parseFloat(orderData.order?.discount_amount || 0);
 
+      const nextReprintCount = (orderData.order.reprint_count || 0) + 1;
+
       return res.json({
-        message: 'Reprint job enqueued successfully.',
-        orderNumber: orderData.order.unique_order_number,
+        message: 'Reprint job processed successfully.',
+        orderNumber: orderData.order.unique_order_number || orderData.order.id,
         order: {
           ...orderData.order,
+          is_duplicate: true,
+          reprint_count: nextReprintCount,
           saved_amount: parseFloat(totalSavedAmount.toFixed(2))
         },
         items: enrichedItems,
         saved_amount: parseFloat(totalSavedAmount.toFixed(2))
       });
     } catch (err) {
-      console.error(err);
-      return res.status(500).json({ error: 'Failed to process reprint.' });
+      console.error('[OrderController.reprint error]:', err);
+      return res.status(500).json({ error: 'Failed to process reprint.', message: err.message || 'Failed to process reprint.' });
     }
   }
 
