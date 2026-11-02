@@ -8,8 +8,18 @@ class ProfileController {
    */
   static async getProfile(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id;
+      const restaurantId = req.user?.restaurant_id;
       if (!restaurantId) {
+        const isSuperAdmin = req.user && (req.user.role === 'super_admin' || req.user.role === 'superadmin');
+        if (isSuperAdmin) {
+          return res.json({
+            id: 0,
+            name: 'Ariso Retail Central Administration',
+            domain: 'superadmin',
+            role: req.user.role,
+            is_superadmin: true
+          });
+        }
         return res.status(400).json({ error: 'Restaurant ID is required.' });
       }
 

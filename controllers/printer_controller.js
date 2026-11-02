@@ -6,7 +6,13 @@ class PrinterController {
   static async getAll(req, res) {
     try {
       const restaurantId = req.user?.restaurant_id;
-      if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
+      if (!restaurantId) {
+        const isSuperAdmin = req.user && (req.user.role === 'super_admin' || req.user.role === 'superadmin');
+        if (isSuperAdmin) {
+          return res.json([]);
+        }
+        return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
+      }
       let printers = await PrinterRepository.getAll(restaurantId);
 
       // If no printer is registered in DB, automatically scan local network and sync

@@ -58,17 +58,38 @@ function broadcast(restaurantId, event, data = {}) {
 }
 
 /**
+ * Broadcast a named event + JSON payload to ALL connected clients across all tenants.
+ * Ideal for platform-wide alerts, system announcements, and application version updates.
+ * @param {string} event  - Event name (e.g. 'app_version_published')
+ * @param {object} data   - Payload object
+ */
+function broadcastAll(event, data = {}) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify({ ...data, ts: Date.now() })}\n\n`;
+
+  clients.forEach((bucket) => {
+    bucket.forEach((res) => {
+      try {
+        res.write(payload);
+      } catch (_) {
+        bucket.delete(res);
+      }
+    });
+  });
+}
+
+/**
  * Convenience helpers — call these after any DB mutation to notify connected UIs.
  */
 const notify = {
-  menuUpdated:      (restaurantId, extra = {}) => broadcast(restaurantId, 'menu_updated', extra),
-  categoryUpdated:  (restaurantId, extra = {}) => broadcast(restaurantId, 'category_updated', extra),
-  stockUpdated:     (restaurantId, extra = {}) => broadcast(restaurantId, 'stock_updated', extra),
-  orderUpdated:     (restaurantId, extra = {}) => broadcast(restaurantId, 'order_updated', extra),
-  inventoryUpdated: (restaurantId, extra = {}) => broadcast(restaurantId, 'inventory_updated', extra),
-  profileUpdated:   (restaurantId, extra = {}) => broadcast(restaurantId, 'profile_updated', extra),
-  priceUpdated:     (restaurantId, extra = {}) => broadcast(restaurantId, 'price_updated', extra),
-  settingsUpdated:  (restaurantId, extra = {}) => broadcast(restaurantId, 'settings_updated', extra),
+  menuUpdated:          (restaurantId, extra = {}) => broadcast(restaurantId, 'menu_updated', extra),
+  categoryUpdated:      (restaurantId, extra = {}) => broadcast(restaurantId, 'category_updated', extra),
+  stockUpdated:         (restaurantId, extra = {}) => broadcast(restaurantId, 'stock_updated', extra),
+  orderUpdated:         (restaurantId, extra = {}) => broadcast(restaurantId, 'order_updated', extra),
+  inventoryUpdated:     (restaurantId, extra = {}) => broadcast(restaurantId, 'inventory_updated', extra),
+  profileUpdated:       (restaurantId, extra = {}) => broadcast(restaurantId, 'profile_updated', extra),
+  priceUpdated:         (restaurantId, extra = {}) => broadcast(restaurantId, 'price_updated', extra),
+  settingsUpdated:      (restaurantId, extra = {}) => broadcast(restaurantId, 'settings_updated', extra),
+  appVersionPublished:  (platform, version, extra = {}) => broadcastAll('app_version_published', { platform, version, ...extra }),
 };
 
-module.exports = { addClient, removeClient, broadcast, notify };
+module.exports = { addClient, removeClient, broadcast, broadcastAll, notify };

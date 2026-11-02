@@ -4,7 +4,10 @@ const CustomerLedgerRepository = require('../repositories/customer_ledger_reposi
 class CustomerController {
   static async getAll(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.json([]);
+      }
       const { search, limit } = req.query;
       const customers = await CustomerRepository.getAll(restaurantId, search, limit);
       return res.json(customers);
@@ -16,7 +19,10 @@ class CustomerController {
 
   static async getById(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.status(404).json({ error: 'Customer not found.' });
+      }
       const customer = await CustomerRepository.getById(req.params.id, restaurantId);
       if (!customer) {
         return res.status(404).json({ error: 'Customer not found.' });
@@ -30,7 +36,10 @@ class CustomerController {
 
   static async create(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.status(400).json({ error: 'Restaurant ID is required to create a party.' });
+      }
       const {
         name, phone, email, address, store_name, gst_number, notes,
         contact_person, shipping_address, place_of_supply, pan_number, credit_limit
@@ -68,7 +77,10 @@ class CustomerController {
 
   static async update(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.status(400).json({ error: 'Restaurant ID is required.' });
+      }
       const success = await CustomerRepository.update(req.params.id, restaurantId, req.body);
       if (!success) {
         return res.status(404).json({ error: 'Party not found or no changes made.' });
@@ -82,7 +94,10 @@ class CustomerController {
 
   static async getOrderHistory(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.json([]);
+      }
       const orders = await CustomerRepository.getOrderHistory(req.params.id, restaurantId);
       return res.json(orders);
     } catch (err) {
@@ -93,7 +108,10 @@ class CustomerController {
 
   static async getChargePresets(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.json([]);
+      }
       const presets = await CustomerRepository.getChargePresets(restaurantId);
       return res.json(presets);
     } catch (err) {
@@ -104,7 +122,10 @@ class CustomerController {
 
   static async addChargePreset(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.status(400).json({ error: 'Restaurant ID is required.' });
+      }
       const { name, default_amount } = req.body;
       if (!name || !name.trim()) {
         return res.status(400).json({ error: 'Charge name is required.' });
@@ -119,7 +140,10 @@ class CustomerController {
 
   static async findOrCreate(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.json({ customer: null });
+      }
       const customer = await CustomerRepository.findOrCreate(restaurantId, req.body);
       return res.json({ customer });
     } catch (err) {
@@ -130,7 +154,10 @@ class CustomerController {
 
   static async getLedger(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id || req.user.restaurantId;
+      const restaurantId = req.user?.restaurant_id || req.user?.restaurantId;
+      if (!restaurantId) {
+        return res.json({ party: null, summary: {}, transactions: [] });
+      }
       const { limit, offset } = req.query;
       const ledgerData = await CustomerLedgerRepository.getLedger(req.params.id, restaurantId, limit, offset);
       return res.json(ledgerData);
