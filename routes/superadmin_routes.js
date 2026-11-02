@@ -60,4 +60,16 @@ router.post('/merchant-stores/:id/custom-domain/verify', StorefrontSuperAdminCon
 router.patch('/merchant-stores/:id/custom-domain/toggle', StorefrontSuperAdminController.toggleCustomDomain);
 router.delete('/merchant-stores/:id/custom-domain', StorefrontSuperAdminController.deleteCustomDomain);
 
+// Application Version Management (Windows & Mobile)
+const AppVersionController = require('../controllers/app_version_controller');
+const packageUpload = require('../middlewares/package_upload_middleware');
+
+router.get('/app-versions', AppVersionController.getSuperAdminVersions);
+router.post('/app-versions', packageUpload.single('package'), AppVersionController.createVersion);
+router.put('/app-versions/:id', packageUpload.single('package'), AppVersionController.updateVersion);
+router.patch('/app-versions/:id/publish', AppVersionController.togglePublish);
+router.patch('/app-versions/:id/toggle-mandatory', AppVersionController.toggleMandatory);
+router.patch('/app-versions/:id/set-latest', AppVersionController.setLatestVersion);
+router.delete('/app-versions/:id', AppVersionController.deleteVersion);
+
 module.exports = router;

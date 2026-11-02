@@ -33,6 +33,7 @@ const customerReceivableRoutes = require('./routes/customer_receivable_routes');
 const serialNumberRoutes = require('./routes/serial_number_routes');
 const storefrontPublicRoutes = require('./routes/storefront_public_routes');
 const storefrontMerchantRoutes = require('./routes/storefront_merchant_routes');
+const appVersionRoutes = require('./routes/app_version_routes');
 
 const { apiLimiter, authLimiter } = require('./middlewares/rate_limiter_middleware');
 const { addClient, removeClient } = require('./services/realtime_service');
@@ -145,6 +146,8 @@ app.use('/api/receivables', customerReceivableRoutes);
 app.use('/api/serial-numbers', serialNumberRoutes);
 app.use('/api/store', storefrontPublicRoutes);
 app.use('/api/merchant/store', storefrontMerchantRoutes);
+app.use('/api/app-versions', appVersionRoutes);
+app.use('/api/version', appVersionRoutes);
 
 const ThemeController = require('./controllers/theme_controller');
 app.get('/api/theme/config', ThemeController.getTheme);
@@ -154,7 +157,8 @@ app.get('/api/theme/config', ThemeController.getTheme);
 // Each tab/device opens one long-lived connection; the server pushes named events
 // whenever data changes (menu, categories, stock, orders, etc.).
 app.get('/api/events', authenticateToken, (req, res) => {
-  const restaurantId = req.user && req.user.restaurant_id;
+  const isSuperAdmin = req.user && (req.user.role === 'super_admin' || req.user.role === 'superadmin');
+  const restaurantId = (req.user && req.user.restaurant_id) || (isSuperAdmin ? 'superadmin' : null);
   if (!restaurantId) return res.status(403).end();
 
   // SSE headers

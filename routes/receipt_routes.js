@@ -32,8 +32,14 @@ router.get('/logo-bytes', authenticateToken, async (req, res) => {
 // GET /api/settings/receipt - Fetch settings
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const restaurantId = req.user.restaurant_id;
-    if (!restaurantId) return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
+    const restaurantId = req.user?.restaurant_id;
+    if (!restaurantId) {
+      const isSuperAdmin = req.user && (req.user.role === 'super_admin' || req.user.role === 'superadmin');
+      if (isSuperAdmin) {
+        return res.json({ restaurant_id: null, store_name: 'Central Admin', paper_width: '80mm' });
+      }
+      return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
+    }
     const settings = await ReceiptRepository.getByRestaurantId(restaurantId);
     return res.json(settings);
   } catch (err) {

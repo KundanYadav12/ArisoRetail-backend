@@ -23,8 +23,12 @@ const displayItemType = (item, isWeight) => {
 class MenuController {
   static async getAll(req, res) {
     try {
-      const restaurantId = req.user.restaurant_id;
+      const restaurantId = req.user?.restaurant_id;
       if (!restaurantId) {
+        const isSuperAdmin = req.user && (req.user.role === 'super_admin' || req.user.role === 'superadmin');
+        if (isSuperAdmin) {
+          return res.json([]);
+        }
         return res.status(403).json({ error: 'No restaurant tenant mapped to this account.' });
       }
       const userAgent = req.headers['user-agent'] || 'unknown';
