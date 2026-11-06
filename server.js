@@ -105,12 +105,19 @@ app.use('/api/auth/send-otp', authLimiter);
 // Apply Multi-Tenant Isolated Rate Limiter to API Routes
 app.use('/api/', apiLimiter);
 
-// Serve uploads directory static files
+// Serve uploads directory static files with high-performance WebP delivery & 30-day caching
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
-app.use('/uploads', express.static(uploadsDir));
+const optimizedImageDelivery = require('./middlewares/optimized_image_delivery');
+app.use('/uploads', optimizedImageDelivery);
+app.use('/uploads', express.static(uploadsDir, {
+  maxAge: '30d',
+  immutable: true,
+  etag: true,
+  lastModified: true
+}));
 
 // Serve virtual printers directory static files
 const virtualPrintersDir = process.env.MOCK_PRINTER_PATH || path.join(__dirname, 'virtual_printers');

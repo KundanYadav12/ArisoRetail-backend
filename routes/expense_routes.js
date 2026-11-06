@@ -14,6 +14,7 @@ router.post(
   '/upload',
   authorizeRoles('super_admin', 'admin', 'manager', 'cashier', 'staff'),
   upload.single('file'),
+  upload.optimizeAttachment,
   ExpenseController.uploadAttachment
 );
 

@@ -27,7 +27,7 @@ const dbConfig = {
   password: process.env.DB_PASS,
   database: process.env.DB_NAME.trim(),
   waitForConnections: true,
-  connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT || '20', 10),
+  connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT || '50', 10),
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
@@ -49,7 +49,7 @@ const pool = mysql.createPool(dbConfig);
 
 // Ensure every pooled connection enforces Indian Standard Time (+05:30)
 pool.on('connection', (connection) => {
-  connection.query("SET time_zone = '+05:30'");
+  connection.query("SET time_zone = '+05:30', innodb_lock_wait_timeout = 15");
 });
 
 // 5. Test initial database connection on startup

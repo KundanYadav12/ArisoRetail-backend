@@ -33,9 +33,9 @@ router.get('/', MenuController.getAll);
 router.get('/check-barcode', MenuController.checkBarcodeDuplicate);
 router.get('/:id', MenuController.getById);
 
-// Admin/Manager can write menu items, supporting optional image upload
-router.post('/', authorizeRoles('admin', 'manager'), upload.single('image'), MenuController.create);
-router.put('/:id', authorizeRoles('admin', 'manager'), upload.single('image'), MenuController.update);
+// Admin/Manager can write menu items, supporting automated WebP compression & thumbnail generation
+router.post('/', authorizeRoles('admin', 'manager'), upload.single('image'), upload.optimizeProduct, MenuController.create);
+router.put('/:id', authorizeRoles('admin', 'manager'), upload.single('image'), upload.optimizeProduct, MenuController.update);
 router.post('/reorder', authorizeRoles('admin', 'manager'), MenuController.reorder);
 
 // Only Admin can delete menu items

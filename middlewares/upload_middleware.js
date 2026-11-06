@@ -54,8 +54,31 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB limit
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB limit (compressed automatically)
   fileFilter: fileFilter
 });
 
+const {
+  optimizeUploadedImage,
+  optimizeProductImage,
+  optimizeLogoImage,
+  optimizeProfileImage,
+  optimizeCategoryImage,
+  optimizeAttachment
+} = require('./image_optimizer_middleware');
+
+upload.optimize = optimizeUploadedImage;
+upload.optimizeProduct = optimizeProductImage;
+upload.optimizeLogo = optimizeLogoImage;
+upload.optimizeProfile = optimizeProfileImage;
+upload.optimizeCategory = optimizeCategoryImage;
+upload.optimizeAttachment = optimizeAttachment;
+
 module.exports = upload;
+module.exports.upload = upload;
+module.exports.optimizeUploadedImage = optimizeUploadedImage;
+module.exports.optimizeProductImage = optimizeProductImage;
+module.exports.optimizeLogoImage = optimizeLogoImage;
+module.exports.optimizeProfileImage = optimizeProfileImage;
+module.exports.optimizeCategoryImage = optimizeCategoryImage;
+module.exports.optimizeAttachment = optimizeAttachment;

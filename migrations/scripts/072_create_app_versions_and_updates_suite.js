@@ -47,7 +47,7 @@ exports.up = async function(connection) {
         'windows', '1.0.0', 100, 'Ariso Retail POS v1.0.0 (Windows)',
         '• Initial production release with high-speed thermal billing.\n• ESC/POS native printer spooling & barcode scanner support.\n• Full offline Dexie cache & cloud sync engine.\n• Complete SuperBill and inventory management.',
         1, 0, '1.0.0',
-        '/uploads/updates/Ariso_Retail_POS_Setup_1.0.0.exe', 'Ariso Retail POS Setup 1.0.0.exe', 104795752, 'installer_exe', NOW()
+        '/uploads/updates/Ariso_Retail_POS_Setup_1.0.0.exe', 'Ariso Retail POS Setup 1.0.0.exe', 105135387, 'installer_exe', NOW()
       )
     `);
     console.log('[Migration 072] Seeded baseline Windows version 1.0.0.');
@@ -66,7 +66,7 @@ exports.up = async function(connection) {
         'mobile', '1.0.0', 100, 'Ariso Retail POS v1.0.0 (Mobile)',
         '• Initial mobile release with mobile counter POS.\n• Bluetooth thermal receipt printer integration.\n• Real-time stock lookups & cloud sync.',
         1, 0, '1.0.0',
-        '/uploads/updates/app-release.apk', 'app-release.apk', 86591205, 'apk', NOW()
+        '/uploads/updates/app-release.apk', 'app-release.apk', 86596648, 'apk', NOW()
       )
     `);
     console.log('[Migration 072] Seeded baseline Mobile version 1.0.0.');
