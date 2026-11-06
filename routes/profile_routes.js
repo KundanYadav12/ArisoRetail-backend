@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { authenticateToken, authorizeRoles, enforceTenantScope } = require('../middlewares/auth_middleware');
 const ProfileController = require('../controllers/profile_controller');
+const { optimizeLogoImage } = require('../middlewares/image_optimizer_middleware');
 
 router.use(authenticateToken);
 router.use(enforceTenantScope);
@@ -50,7 +51,7 @@ const storage = multer.diskStorage({
 
 const uploadLogoMiddleware = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB Limit
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB Limit
   fileFilter: (req, file, cb) => {
     const allowedExts = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif'];
     const ext = getExtension(file);
@@ -68,10 +69,10 @@ router.get('/', authenticateToken, ProfileController.getProfile);
 // PUT /api/settings/profile
 router.put('/', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), ProfileController.updateProfile);
 
-// POST /api/settings/profile/logo
-router.post('/logo', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), uploadLogoMiddleware.single('logo'), ProfileController.uploadLogo);
+// POST /api/settings/profile/logo (Automatically compressed to modern WebP with transparency)
+router.post('/logo', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), uploadLogoMiddleware.single('logo'), optimizeLogoImage, ProfileController.uploadLogo);
 
-// POST /api/settings/profile/qr
-router.post('/qr', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), uploadLogoMiddleware.single('qr_image'), ProfileController.uploadQrCode);
+// POST /api/settings/profile/qr (Automatically compressed & optimized)
+router.post('/qr', authenticateToken, authorizeRoles('admin', 'manager', 'super_admin', 'superadmin'), uploadLogoMiddleware.single('qr_image'), optimizeLogoImage, ProfileController.uploadQrCode);
 
 module.exports = router;

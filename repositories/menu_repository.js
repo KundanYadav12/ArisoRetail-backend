@@ -23,9 +23,10 @@ class MenuRepository {
     }
 
     if (search) {
-      query += ' AND (m.name LIKE ? OR m.sku LIKE ? OR m.barcode LIKE ? OR m.description LIKE ? OR m.item_code LIKE ? OR m.brand LIKE ?)';
-      const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      const cleanSearch = String(search).trim();
+      query += ' AND (m.barcode = ? OR m.sku = ? OR m.item_code = ? OR m.name LIKE ? OR m.sku LIKE ? OR m.barcode LIKE ? OR m.description LIKE ? OR m.brand LIKE ?)';
+      const searchTerm = `%${cleanSearch}%`;
+      params.push(cleanSearch, cleanSearch, cleanSearch, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     query += ' ORDER BY m.category_id ASC, m.name ASC';

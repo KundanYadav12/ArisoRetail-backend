@@ -20,9 +20,10 @@ class OrderRepository {
   /**
    * Complete transactional order creation
    */
-  static async create(restaurantId, orderData, items) {
+  static async create(restaurantId, orderData, items, idempotencyKey = null) {
     let attempts = 0;
     const MAX_RETRIES = 10;
+    const effectiveIdempotencyKey = (idempotencyKey || orderData?.idempotency_key || orderData?.offline_id || '').toString().trim() || null;
 
     while (attempts < MAX_RETRIES) {
       attempts++;
@@ -65,20 +66,24 @@ class OrderRepository {
           is_sales_order
         } = orderData;
 
+        // Note: effectiveIdempotencyKey is scoped at function level for try/catch availability
+
         // Check idempotency inside transaction for strict race-condition safety
-        if (idempotency_key) {
+        if (effectiveIdempotencyKey) {
           const [dupRows] = await connection.execute(
             'SELECT id, unique_order_number FROM orders WHERE restaurant_id = ? AND idempotency_key = ? LIMIT 1',
-            [restaurantId, idempotency_key]
+            [restaurantId, effectiveIdempotencyKey]
           );
           if (dupRows.length > 0) {
             await connection.rollback();
             connection.release();
+            const [existingItems] = await pool.query('SELECT * FROM order_items WHERE order_id = ?', [dupRows[0].id]);
             return {
               order: {
                 id: dupRows[0].id,
                 unique_order_number: dupRows[0].unique_order_number
               },
+              items: existingItems,
               id: dupRows[0].id,
               unique_order_number: dupRows[0].unique_order_number,
               isDuplicate: true
@@ -123,23 +128,18 @@ class OrderRepository {
         const dateStr = `${year}${month}${day}`;
         const datePrefix = `${docPrefixCode}-${dateStr}-`;
 
-        // Concurrency-Safe Atomic Sequence Generator
+        // Concurrency-Safe Atomic Sequence Generator (Zero S-lock deadlock)
         const getNextSequence = async () => {
-          await connection.execute(
-            'INSERT IGNORE INTO order_sequences (restaurant_id, order_date, last_seq) VALUES (?, ?, 0)',
-            [restaurantId, dateStr]
-          );
-
-          const [seqRows] = await connection.execute(
+          let [seqRows] = await connection.execute(
             'SELECT last_seq FROM order_sequences WHERE restaurant_id = ? AND order_date = ? FOR UPDATE',
             [restaurantId, dateStr]
           );
 
-          let currentSeq = parseInt(seqRows[0]?.last_seq || 0, 10);
-
-          if (currentSeq === 0) {
+          let currentSeq = 0;
+          if (seqRows.length === 0) {
+            // Bootstrap sequence only on very first order of new date
             const [maxOrd] = await connection.execute(
-              'SELECT unique_order_number FROM orders WHERE restaurant_id = ? AND unique_order_number LIKE ? ORDER BY id DESC',
+              'SELECT unique_order_number FROM orders WHERE restaurant_id = ? AND unique_order_number LIKE ? ORDER BY id DESC LIMIT 1',
               [restaurantId, `${datePrefix}%`]
             );
             for (const row of maxOrd) {
@@ -149,19 +149,24 @@ class OrderRepository {
                 currentSeq = num;
               }
             }
+            const nextSeq = currentSeq + 1;
+            await connection.execute(
+              'INSERT INTO order_sequences (restaurant_id, order_date, last_seq) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE last_seq = last_seq + 1',
+              [restaurantId, dateStr, nextSeq]
+            );
+            return nextSeq;
+          } else {
+            currentSeq = parseInt(seqRows[0].last_seq || 0, 10);
+            let nextSeq = currentSeq + 1;
+            if (attempts > 1) {
+              nextSeq = Math.max(nextSeq, currentSeq + (attempts - 1));
+            }
+            await connection.execute(
+              'UPDATE order_sequences SET last_seq = ? WHERE restaurant_id = ? AND order_date = ?',
+              [nextSeq, restaurantId, dateStr]
+            );
+            return nextSeq;
           }
-
-          let nextSeq = currentSeq + 1;
-          if (attempts > 1) {
-            nextSeq = Math.max(nextSeq, currentSeq + (attempts - 1));
-          }
-
-          await connection.execute(
-            'UPDATE order_sequences SET last_seq = ? WHERE restaurant_id = ? AND order_date = ?',
-            [nextSeq, restaurantId, dateStr]
-          );
-
-          return nextSeq;
         };
 
         const seq = await getNextSequence();
@@ -208,20 +213,29 @@ class OrderRepository {
         const effectiveTaxType = posRes.taxType;
         const effectivePlaceOfSupply = place_of_supply || posRes.placeOfSupply;
 
-        // Enrich items with HSN and exemption from menu_items if needed
-        for (const item of items) {
-          const mId = item.menu_item_id || item.product_id || item.id || null;
-          if (mId && !item.hsn_code) {
-            try {
-              const [mRows] = await connection.execute('SELECT hsn_code, is_tax_exempt, gst_rate FROM menu_items WHERE id = ?', [mId]);
-              if (mRows.length > 0) {
-                item.hsn_code = item.hsn_code || mRows[0].hsn_code || null;
-                if (item.is_tax_exempt === undefined) item.is_tax_exempt = mRows[0].is_tax_exempt;
-                if (item.gst_rate === undefined && mRows[0].gst_rate !== undefined) item.gst_rate = mRows[0].gst_rate;
+        // Enrich items with HSN and exemption from menu_items if needed (Batched query for high concurrency)
+        const missingHsnIds = items
+          .map(it => it.menu_item_id || it.product_id || it.id || null)
+          .filter(Boolean);
+        if (missingHsnIds.length > 0) {
+          try {
+            const placeholders = missingHsnIds.map(() => '?').join(',');
+            const [mRows] = await connection.query(
+              `SELECT id, hsn_code, is_tax_exempt, gst_rate FROM menu_items WHERE id IN (${placeholders})`,
+              missingHsnIds
+            );
+            const hsnMap = new Map(mRows.map(r => [r.id, r]));
+            for (const item of items) {
+              const mId = item.menu_item_id || item.product_id || item.id || null;
+              if (mId && hsnMap.has(mId)) {
+                const meta = hsnMap.get(mId);
+                if (!item.hsn_code) item.hsn_code = meta.hsn_code || null;
+                if (item.is_tax_exempt === undefined) item.is_tax_exempt = meta.is_tax_exempt;
+                if (item.gst_rate === undefined && meta.gst_rate !== undefined) item.gst_rate = meta.gst_rate;
               }
-            } catch (err) {
-              // Ignore lookup error
             }
+          } catch (err) {
+            // Ignore lookup error
           }
         }
 
@@ -350,7 +364,7 @@ class OrderRepository {
           'INSERT INTO orders (order_number, unique_order_number, idempotency_key, restaurant_id, cashier_id, cashier_name, subtotal, tax_amount, discount_amount, total_amount, paid_amount, due_date, advance_amount, payment_mode, payment_details, order_status, payment_status, cashier_shift_id, table_number_or_takeaway, notes, kitchen_status, discount_type, discount_value, customer_name, customer_phone, customer_id, salesman_id, salesman_name, tax_type, delivery_date, billing_address, shipping_address, place_of_supply, price_list, reference_number, additional_charges, is_sales_order, warehouse_id, parent_order_id, is_estimate, invoiced_amount, cgst_amount, sgst_amount, igst_amount, round_off, tax_invoice_type) ' +
           'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
-            uniqueOrderNumber, uniqueOrderNumber, idempotency_key || null, restaurantId, cashier_id || null, cashier_name || null, safeSubtotal, safeTaxAmount,
+            uniqueOrderNumber, uniqueOrderNumber, effectiveIdempotencyKey, restaurantId, cashier_id || null, cashier_name || null, safeSubtotal, safeTaxAmount,
             safeDiscountAmount, safeTotalAmount, safePaidAmount, orderDueDate, safeAdvanceAmount, payment_mode || 'pending', payment_details ? JSON.stringify(payment_details) : null,
             orderStatus || 'pending', calculatedPaymentStatus, safeCashierShiftId || null, table_number_or_takeaway || 'Takeaway', notes || null,
             discount_type || 'amount', parseFloat(discount_value || 0), resolvedCustomerName || null, resolvedCustomerPhone || null,
@@ -364,15 +378,28 @@ class OrderRepository {
         );
         const orderId = orderResult.insertId;
 
-        // 4. Insert Order Items (with line-level tax snapshot)
+        // 4. Insert Order Items (with line-level tax snapshot - Batched existence check)
+        const rawItemIds = docTax.items
+          .map(it => it.menu_item_id || it.product_id || it.id || null)
+          .filter(Boolean);
+        const validItemIds = new Set();
+        if (rawItemIds.length > 0) {
+          try {
+            const placeholders = rawItemIds.map(() => '?').join(',');
+            const [validRows] = await connection.query(
+              `SELECT id FROM menu_items WHERE id IN (${placeholders})`,
+              rawItemIds
+            );
+            validRows.forEach(r => validItemIds.add(r.id));
+          } catch (_) {}
+        }
+
+        // 4.1 Insert Order Items
+        const stockItemsToUpdate = [];
+
         for (const item of docTax.items) {
-          let menuItemId = item.menu_item_id || item.product_id || item.id || null;
-          if (menuItemId) {
-            const [checkItem] = await connection.execute('SELECT id FROM menu_items WHERE id = ?', [menuItemId]);
-            if (checkItem.length === 0) {
-              menuItemId = null;
-            }
-          }
+          let rawId = item.menu_item_id || item.product_id || item.id || null;
+          let menuItemId = (rawId && validItemIds.has(rawId)) ? rawId : null;
 
           const itemQuantity = isNaN(parseInt(item.quantity)) ? 1 : parseInt(item.quantity);
           const itemWeight = item.item_weight !== undefined && item.item_weight !== null ? parseFloat(item.item_weight) : null;
@@ -411,78 +438,91 @@ class OrderRepository {
             ]
           );
 
-          // Dynamic Inventory Stock Handling (KG & PCS, Pending vs Completed)
           if (menuItemId) {
-            try {
-              const [curStockRows] = await connection.execute(
-                'SELECT name, unit, current_stock, reserved_stock, is_weight_based, track_inventory FROM menu_items WHERE id = ? AND restaurant_id = ? FOR UPDATE',
-                [menuItemId, restaurantId]
-              );
-              if (curStockRows.length > 0) {
-                const itemData = curStockRows[0];
-                const prevStock = parseFloat(itemData.current_stock || 0);
-                const prevReserved = parseFloat(itemData.reserved_stock || 0);
-                const isWeightBased = itemData.is_weight_based === 1 || itemWeight !== null;
-                const soldQty = isWeightBased ? (itemWeight !== null ? parseFloat(itemWeight) : itemQuantity) : itemQuantity;
-                const availableStock = Math.max(0, prevStock - prevReserved);
+            stockItemsToUpdate.push({
+              menuItemId,
+              itemQuantity,
+              itemWeight,
+              unitPrice: item.unitPrice,
+              price: item.price
+            });
+          }
+        }
 
-                if (orderStatus === 'pending') {
-                  if (isEstimateFlag === 1) {
-                    // Estimates are quotations only - ZERO stock reservation!
-                  } else {
-                    // Sales Order: Validate available stock to prevent overselling
-                    if (itemData.track_inventory !== 0 && soldQty > availableStock) {
-                      throw new Error(`Insufficient stock for "${itemData.name}". Requested: ${soldQty} ${itemData.unit || 'pcs'}, but only ${availableStock} ${itemData.unit || 'pcs'} is available (${prevStock} current, ${prevReserved} reserved in pending orders).`);
-                    }
-                    // Dynamic Stock: For pending sales orders, increment reserved_stock without touching physical current_stock
-                    const newReserved = prevReserved + soldQty;
-                    await connection.execute(
-                      'UPDATE menu_items SET reserved_stock = ? WHERE id = ? AND restaurant_id = ?',
-                      [newReserved, menuItemId, restaurantId]
-                    );
-                    if (orderWarehouseId) {
-                      await connection.execute(
-                        'UPDATE warehouse_stocks SET reserved_stock = reserved_stock + ? WHERE restaurant_id = ? AND warehouse_id = ? AND menu_item_id = ?',
-                        [soldQty, restaurantId, orderWarehouseId, menuItemId]
-                      ).catch(() => {});
-                    }
-                  }
+        // 4.2 Deterministic Sorted Stock Locking (Ascending ID order eliminates cross-transaction deadlocks)
+        stockItemsToUpdate.sort((a, b) => a.menuItemId - b.menuItemId);
+
+        for (const stockEntry of stockItemsToUpdate) {
+          const { menuItemId, itemQuantity, itemWeight, unitPrice, price } = stockEntry;
+          try {
+            const [curStockRows] = await connection.execute(
+              'SELECT name, unit, current_stock, reserved_stock, is_weight_based, track_inventory FROM menu_items WHERE id = ? AND restaurant_id = ? FOR UPDATE',
+              [menuItemId, restaurantId]
+            );
+            if (curStockRows.length > 0) {
+              const itemData = curStockRows[0];
+              const prevStock = parseFloat(itemData.current_stock || 0);
+              const prevReserved = parseFloat(itemData.reserved_stock || 0);
+              const isWeightBased = itemData.is_weight_based === 1 || itemWeight !== null;
+              const soldQty = isWeightBased ? (itemWeight !== null ? parseFloat(itemWeight) : itemQuantity) : itemQuantity;
+              const availableStock = Math.max(0, prevStock - prevReserved);
+
+              if (orderStatus === 'pending') {
+                if (isEstimateFlag === 1) {
+                  // Estimates are quotations only - ZERO stock reservation!
                 } else {
-                  // Standard Completed Order: Deduct directly from physical current_stock
-                  const newStock = Math.max(0, prevStock - soldQty);
+                  // Sales Order: Validate available stock to prevent overselling
+                  if (itemData.track_inventory !== 0 && soldQty > availableStock) {
+                    throw new Error(`Insufficient stock for "${itemData.name}". Requested: ${soldQty} ${itemData.unit || 'pcs'}, but only ${availableStock} ${itemData.unit || 'pcs'} is available (${prevStock} current, ${prevReserved} reserved in pending orders).`);
+                  }
+                  // Dynamic Stock: For pending sales orders, increment reserved_stock without touching physical current_stock
+                  const newReserved = prevReserved + soldQty;
                   await connection.execute(
-                    'UPDATE menu_items SET current_stock = ? WHERE id = ? AND restaurant_id = ?',
-                    [newStock, menuItemId, restaurantId]
+                    'UPDATE menu_items SET reserved_stock = ? WHERE id = ? AND restaurant_id = ?',
+                    [newReserved, menuItemId, restaurantId]
                   );
-                  await connection.execute(
-                    `INSERT INTO stock_logs (restaurant_id, menu_item_id, user_name, adjustment_type, quantity, previous_stock, new_stock, reason)
-                     VALUES (?, ?, ?, 'sale', ?, ?, ?, ?)`,
-                    [restaurantId, menuItemId, cashier_name || 'POS Cashier', soldQty, prevStock, newStock, `Order #${uniqueOrderNumber}`]
-                  ).catch(sErr => console.warn('[Stock Log Warning]:', sErr.message));
-
-                  // Multi-warehouse Stock Ledger & Warehouse Stock update
                   if (orderWarehouseId) {
-                    await StockMovementService.recordMovement(connection, {
-                      restaurantId,
-                      warehouseId: orderWarehouseId,
-                      menuItemId,
-                      type: 'SALE',
-                      quantity: -soldQty,
-                      unitCost: item.unitPrice || parseFloat(item.price || 0),
-                      referenceType: 'order',
-                      referenceId: orderId,
-                      referenceNumber: uniqueOrderNumber,
-                      userId: cashier_id,
-                      userName: cashier_name || 'POS Cashier',
-                      notes: `Sale Order #${uniqueOrderNumber}`
-                    }).catch(txErr => console.warn('[Stock Transaction Warning]:', txErr.message));
+                    await connection.execute(
+                      'UPDATE warehouse_stocks SET reserved_stock = reserved_stock + ? WHERE restaurant_id = ? AND warehouse_id = ? AND menu_item_id = ?',
+                      [soldQty, restaurantId, orderWarehouseId, menuItemId]
+                    ).catch(() => {});
                   }
                 }
+              } else {
+                // Standard Completed Order: Deduct directly from physical current_stock
+                const newStock = Math.max(0, prevStock - soldQty);
+                await connection.execute(
+                  'UPDATE menu_items SET current_stock = ? WHERE id = ? AND restaurant_id = ?',
+                  [newStock, menuItemId, restaurantId]
+                );
+                await connection.execute(
+                  `INSERT INTO stock_logs (restaurant_id, menu_item_id, user_name, adjustment_type, quantity, previous_stock, new_stock, reason)
+                   VALUES (?, ?, ?, 'sale', ?, ?, ?, ?)`,
+                  [restaurantId, menuItemId, cashier_name || 'POS Cashier', soldQty, prevStock, newStock, `Order #${uniqueOrderNumber}`]
+                ).catch(sErr => console.warn('[Stock Log Warning]:', sErr.message));
+
+                // Multi-warehouse Stock Ledger & Warehouse Stock update
+                if (orderWarehouseId) {
+                  await StockMovementService.recordMovement(connection, {
+                    restaurantId,
+                    warehouseId: orderWarehouseId,
+                    menuItemId,
+                    type: 'SALE',
+                    quantity: -soldQty,
+                    unitCost: unitPrice || parseFloat(price || 0),
+                    referenceType: 'order',
+                    referenceId: orderId,
+                    referenceNumber: uniqueOrderNumber,
+                    userId: cashier_id,
+                    userName: cashier_name || 'POS Cashier',
+                    notes: `Sale Order #${uniqueOrderNumber}`
+                  }).catch(txErr => console.warn('[Stock Transaction Warning]:', txErr.message));
+                }
               }
-            } catch (invErr) {
-              console.warn('[Inventory Stock Update Warning]:', invErr.message);
-              throw invErr;
             }
+          } catch (invErr) {
+            console.warn('[Inventory Stock Update Warning]:', invErr.message);
+            throw invErr;
           }
         }
 
@@ -649,9 +689,34 @@ class OrderRepository {
         };
       } catch (err) {
         await connection.rollback();
-        const isRetryable = (err.code === 'ER_DUP_ENTRY' || err.errno === 1062 || err.code === 'ER_LOCK_DEADLOCK' || err.errno === 1213);
+
+        // Concurrency-safe duplicate idempotency handling (Zero duplicate orders under race conditions)
+        if ((err.code === 'ER_DUP_ENTRY' || err.errno === 1062) && effectiveIdempotencyKey) {
+          try {
+            const [existing] = await pool.query(
+              'SELECT * FROM orders WHERE restaurant_id = ? AND idempotency_key = ? LIMIT 1',
+              [restaurantId, effectiveIdempotencyKey]
+            );
+            if (existing.length > 0) {
+              const [existingItems] = await pool.query(
+                'SELECT * FROM order_items WHERE order_id = ?',
+                [existing[0].id]
+              );
+              console.log(`[OrderRepository] Caught concurrent duplicate idempotency_key collision for "${effectiveIdempotencyKey}". Returning existing Order #${existing[0].unique_order_number}.`);
+              return {
+                order: existing[0],
+                items: existingItems,
+                id: existing[0].id,
+                unique_order_number: existing[0].unique_order_number,
+                isDuplicate: true
+              };
+            }
+          } catch (_) {}
+        }
+
+        const isRetryable = (err.code === 'ER_DUP_ENTRY' || err.errno === 1062 || err.code === 'ER_LOCK_DEADLOCK' || err.errno === 1213 || err.code === 'ER_LOCK_WAIT_TIMEOUT');
         if (isRetryable && attempts < MAX_RETRIES) {
-          const backoffDelay = Math.floor(Math.random() * 60 + attempts * 50);
+          const backoffDelay = Math.floor(Math.random() * 50 + attempts * 40);
           console.warn(`[Order Repository Retry] Retryable error (${err.code || err.errno}) on attempt ${attempts}/${MAX_RETRIES}. Backing off ${backoffDelay}ms...`);
           await new Promise(r => setTimeout(r, backoffDelay));
           continue;
